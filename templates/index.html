@@ -58,6 +58,14 @@
                     </div>
                 </div>
                 
+                <!-- Existing Uploads List -->
+                <div id="existing-uploads-container" class="mt-4 text-start d-none">
+                    <h6 class="text-uppercase text-muted fw-semibold mb-3 tracking-wide small">Or choose from pending uploads</h6>
+                    <div id="existing-uploads-list" class="list-group shadow-sm rounded-3 overflow-hidden bg-surface border-0">
+                        <!-- Listed items go here via JS -->
+                    </div>
+                </div>
+                
                 <!-- Upload Progress -->
                 <div id="upload-progress-container" class="mt-4 text-start d-none">
                     <div class="d-flex justify-content-between mb-2 small text-muted">
@@ -122,12 +130,53 @@
             </div>
 
             <!-- Controls Column -->
-            <div class="col-xl-4 col-lg-5 mb-4">
+<div class="col-xl-4 col-lg-5 mb-4">
                 <div class="card bg-surface border-0 shadow-lg rounded-4 h-100 d-flex flex-column">
                     <div class="card-header bg-transparent border-darker py-3">
                         <div class="d-flex align-items-center">
                             <i class="bi bi-sliders me-2 text-primary"></i>
                             <h5 class="mb-0 fw-semibold text-white fs-6">Toolbox</h5>
+                        </div>
+                    </div>
+
+                    <!-- AI Analysis Section -->
+                    <div class="tool-section mb-4 p-3 bg-darker rounded-3 border border-dark">
+                        <div class="d-flex align-items-center mb-3">
+                            <i class="bi bi-emoji-smile-upside-down text-info me-2 fs-5"></i>
+                            <h6 class="text-uppercase text-light fw-semibold mb-0 tracking-wide text-xs">AI Analysis</h6>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label text-muted small">Game Type</label>
+                            <select class="form-select bg-dark text-white border-secondary" id="game-type">
+                                <option value="unknown">Auto Detect</option>
+                                <option value="fortnite">Fortnite</option>
+                                <option value="ageofempires">Age of Empires</option>
+                                <option value="callofduty">Call of Duty</option>
+                                <option value="other">Other Game</option>
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <div class="form-check form-switch ps-0 m-0 custom-switch">
+                                <input class="form-check-input ms-0" type="checkbox" id="ai-analysis-switch" role="switch">
+                                <label class="form-check-label text-muted small" for="ai-analysis-switch">
+                                    Enable AI Analysis
+                                </label>
+                            </div>
+                            <small class="text-muted">Extract satisfying moments for YouTube Shorts/Instagram Reels</small>
+                        </div>
+
+                        <div class="mt-3 d-none" id="ai-progress">
+                            <div class="progress bg-darker rounded-pill overflow-visible" style="height: 6px;">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated bg-gradient-info rounded-pill position-relative" id="ai-progress-bar" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+                                    <div class="progress-glow"></div>
+                                </div>
+                            </div>
+                            <small class="text-muted d-flex justify-content-between mt-1">
+                                <span id="ai-progress-text">Analyzing...</span>
+                                <span id="ai-progress-percent">0%</span>
+                            </small>
                         </div>
                     </div>
                     
@@ -183,17 +232,56 @@
                             </div>
                         </div>
                         
-                        <!-- Export Action -->
+<!-- Export Action -->
                         <div class="mt-auto">
                             <button id="process-btn" class="btn btn-primary btn-lg w-100 rounded-3 fw-bold shadow-sm hover-glow text-uppercase tracking-wide py-3 d-flex justify-content-center align-items-center">
                                 <i class="bi bi-gear-fill me-2 fs-5"></i> Process Video
                             </button>
                         </div>
+
+                        <!-- AI Results Section -->
+                        <div class="mt-4 d-none" id="ai-results">
+                            <div class="tool-section p-3 bg-darker rounded-3 border border-dark">
+                                <div class="d-flex align-items-center mb-3">
+                                    <i class="bi bi-star text-warning me-2 fs-5"></i>
+                                    <h6 class="text-uppercase text-light fw-semibold mb-0 tracking-wide text-xs">AI Results</h6>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label class="form-label text-muted small">Title</label>
+                                    <input type="text" class="form-control bg-dark text-white border-secondary" id="ai-title" readonly>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label class="form-label text-muted small">Description</label>
+                                    <textarea class="form-control bg-dark text-white border-secondary" id="ai-description" rows="3" readonly></textarea>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label class="form-label text-muted small">Tags</label>
+                                    <input type="text" class="form-control bg-dark text-white border-secondary" id="ai-tags" readonly>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label class="form-label text-muted small">Hashtags</label>
+                                    <input type="text" class="form-control bg-dark text-white border-secondary" id="ai-hashtags" readonly>
+                                </div>
+
+                                <div class="d-grid gap-2">
+                                    <button class="btn btn-warning btn-sm" id="view-moments-btn">
+                                        <i class="bi bi-list-ul me-2"></i>View Satisfying Moments
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
                     </div>
                 </div>
             </div>
             
-            <!-- Process Progress Container -->
+<!-- Process Progress Container -->
             <div class="col-12 mt-2 d-none" id="process-progress-container">
                 <div class="card bg-surface border-0 shadow-lg rounded-4 overflow-hidden">
                     <div class="card-body p-4">
@@ -223,6 +311,35 @@
                 </div>
             </div>
             
+        </div>
+    </div>
+
+    <!-- AI Results Modal -->
+    <div class="modal fade" id="momentsModal" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content bg-dark text-light border-0">
+                <div class="modal-header border-secondary">
+                    <h5 class="modal-title"><i class="bi bi-stars text-warning me-2"></i>Satisfying Moments</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <!-- Tabs -->
+                <ul class="nav nav-tabs border-secondary px-3 pt-2" id="momentsTab">
+                    <li class="nav-item">
+                        <button class="nav-link active text-light" data-bs-toggle="tab" data-bs-target="#tab-clips">📹 Short Clips</button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link text-light" data-bs-toggle="tab" data-bs-target="#tab-story">📖 Gameplay Story</button>
+                    </li>
+                </ul>
+                <div class="modal-body tab-content">
+                    <div class="tab-pane fade show active" id="tab-clips">
+                        <div id="moments-list"></div>
+                    </div>
+                    <div class="tab-pane fade" id="tab-story">
+                        <pre id="story-text" class="text-muted small" style="white-space:pre-wrap; font-family:monospace; max-height:420px; overflow-y:auto;">Story not yet generated. Process a video with AI Analysis enabled.</pre>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 

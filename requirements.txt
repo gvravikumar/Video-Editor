@@ -1,4 +1,12 @@
-Flask==3.0.3
-moviepy==1.0.3
-werkzeug==3.0.3
-proglog==0.1.10
+Flask
+moviepy
+werkzeug
+proglog
+opencv-python
+tensorflow
+torch
+transformers
+torchvision
+nltk
+Pillow
+scikit-learn

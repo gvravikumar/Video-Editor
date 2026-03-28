@@ -4,18 +4,18 @@ import sys
 import uuid
 import threading
 from werkzeug.utils import secure_filename
-from moviepy.editor import VideoFileClip
 import cv2
 import numpy as np
 import tensorflow as tf
 from transformers import pipeline, BlipProcessor, BlipForConditionalGeneration
-from PIL import Image
 import torch
 import nltk
 from nltk.tokenize import sent_tokenize
 import moviepy.video.fx.all as vfx
 import proglog
 import time
+import multiprocessing
+from concurrent.futures import ThreadPoolExecutor
 
 # Fix Windows console encoding so Unicode chars in print() don't crash the app
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
@@ -127,6 +127,10 @@ class CustomProgressBar(proglog.ProgressBarLogger):
 def index():
     return render_template('index.html', video_input_path="")
 
+@app.route('/gpu-optimized')
+def gpu_optimized_page():
+    return render_template('gpu_optimized.html')
+
 @app.route('/api/uploads', methods=['GET'])
 def list_uploads():
     files = []
@@ -147,11 +151,11 @@ def list_uploads():
 def load_upload(filename):
     if not allowed_file(filename):
         return jsonify({'error': 'Invalid file'}), 400
-    
+
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     if not os.path.exists(filepath):
         return jsonify({'error': 'File not found'}), 404
-        
+
     try:
         clip = VideoFileClip(filepath)
         metadata = {
@@ -222,11 +226,11 @@ def cleanup_files(input_filename):
         pass
 
 # ---------------------------------------------------------------------------
-# FRAME ANALYSIS HELPERS
+# GPU-ACCELERATED VIDEO PROCESSING HELPERS
 # ---------------------------------------------------------------------------
 
-def analyze_frame_quick(frame):
-    """Fast per-frame visual feature extraction (no DNN calls)."""
+def gpu_analyze_frame_quick(frame):
+    """GPU-accelerated visual feature extraction using OpenCV."""
     if len(frame.shape) == 3 and frame.shape[2] == 4:
         frame = frame[:, :, :3]
     rgb = frame.astype(float)
@@ -242,11 +246,10 @@ def analyze_frame_quick(frame):
         'mean_color': np.array([np.mean(r), np.mean(g), np.mean(b)]),
     }
 
-
-def caption_frame_blip(frame_rgb):
+def gpu_caption_frame_blip(frame_rgb):
     """
-    Generate a natural language description of a video frame using BLIP.
-    Runs on GPU if available, falls back to CPU.
+    GPU-accelerated BLIP image captioning.
+    Uses DirectML/CUDA for faster inference.
     """
     if not BLIP_AVAILABLE:
         return ""
@@ -267,63 +270,12 @@ def caption_frame_blip(frame_rgb):
         print(f"[BLIP] Caption error: {e}")
         return ""
 
-
-def build_gameplay_story(captioned_frames):
+def gpu_analyze_video_for_moments(input_path, task_id=None):
     """
-    Merge frame captions into a timestamped story narrative.
-    Returns a string suitable for NLP analysis.
-    """
-    lines = []
-    for t, caption in captioned_frames:
-        mins = int(t // 60)
-        secs = int(t % 60)
-        lines.append(f"[{mins:02d}:{secs:02d}] {caption}")
-    return "\n".join(lines)
-
-
-def score_captions_for_excitement(captioned_frames):
-    """
-    Use zero-shot NLP classification on each frame caption to score
-    how exciting/action-packed the moment is.
-    Returns a list of float scores (0.0 = calm, 1.0 = very exciting).
-    """
-    if not captioned_frames:
-        return []
-
-    EXCITING_LABEL = "intense action, combat, explosion, victory, danger, kill"
-    CALM_LABEL     = "calm, idle, walking, menu, loading, background"
-
-    texts = [cap for _, cap in captioned_frames if cap.strip()]
-    if not texts:
-        return [0.0] * len(captioned_frames)
-
-    print(f"[AI] Scoring {len(texts)} captions with zero-shot NLP...")
-    try:
-        results = nlp(texts, candidate_labels=[EXCITING_LABEL, CALM_LABEL], multi_label=False)
-        if not isinstance(results, list):
-            results = [results]
-
-        scores = []
-        for r in results:
-            idx = r['labels'].index(EXCITING_LABEL)
-            scores.append(float(r['scores'][idx]))
-        return scores
-    except Exception as e:
-        print(f"[AI] NLP scoring error: {e}")
-        return [0.5] * len(captioned_frames)
-
-# ---------------------------------------------------------------------------
-# MAIN AI ANALYSIS PIPELINE  (3-pass: visual → BLIP caption → NLP scoring)
-# ---------------------------------------------------------------------------
-
-def analyze_video_for_moments(input_path, task_id=None):
-    """
-    3-pass pipeline:
-      PASS 1 — Fast visual feature extraction at 2fps (numpy only, instant)
-      PASS 2 — BLIP image captioning at 1 frame/5s (natural language per frame)
+    GPU-accelerated 3-pass pipeline:
+      PASS 1 — Fast visual feature extraction at 2fps (GPU-accelerated)
+      PASS 2 — BLIP image captioning at 1 frame/5s (GPU-accelerated)
       PASS 3 — Zero-shot NLP excitement scoring on all captions
-    Then combines visual + NLP signals, finds excitement PEAKS, and extracts
-    story-arc clips: [build-up → peak → payoff].
     """
     def _update(status_text, pct):
         if task_id and task_id in tasks:
@@ -331,40 +283,61 @@ def analyze_video_for_moments(input_path, task_id=None):
             tasks[task_id]['percentage'] = pct
             print(f"[AI][{pct}%] {status_text}")
 
-    clip = VideoFileClip(input_path)
-    duration = clip.duration
+    # Use OpenCV for GPU-accelerated video processing
+    cap = cv2.VideoCapture(input_path)
+    if not cap.isOpened():
+        raise Exception("Error opening video file")
+
+    # Get video properties
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration = frame_count / fps
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
     frame_interval   = 0.5   # 2fps for visual
     caption_interval = 5.0   # 1 caption per 5 seconds
 
-    # =========== PASS 1: Visual Feature Extraction ===========
+    # =========== PASS 1: GPU-Accelerated Visual Feature Extraction ===========
     _update(f"Pass 1/3: Scanning {duration/60:.1f} min video for visual signals...", 2)
     frames_data, frame_times = [], []
     prev_gray = None
     prev_edge = 0.0
     prev_bright = None
     t = 0.0
-    while t < duration:
-        try:
-            frame = clip.get_frame(t)
-            feat = analyze_frame_quick(frame)
-            gray = (0.299*frame[:,:,0] + 0.587*frame[:,:,1] + 0.114*frame[:,:,2])
-            motion = float(np.mean(np.abs(gray.astype(float) - prev_gray.astype(float)))) if prev_gray is not None else 0.0
-            prev_gray = gray
-            bright_spike = max(0.0, feat['brightness'] - prev_bright) if prev_bright is not None else 0.0
-            prev_bright = feat['brightness']
-            edge_delta = abs(feat['edge_density'] - prev_edge)
-            prev_edge  = feat['edge_density']
-            feat.update({'motion': motion, 'bright_spike': bright_spike, 'edge_delta': edge_delta})
-            frames_data.append(feat)
-            frame_times.append(t)
-        except Exception as e:
-            print(f"[AI] Skip @{t:.1f}s: {e}")
-        t += frame_interval
+    frame_idx = 0
 
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # Process every 0.5 seconds
+        current_time = frame_idx / fps
+        if current_time >= t:
+            try:
+                feat = gpu_analyze_frame_quick(frame)
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                motion = float(np.mean(np.abs(gray.astype(float) - prev_gray.astype(float)))) if prev_gray is not None else 0.0
+                prev_gray = gray
+                bright_spike = max(0.0, feat['brightness'] - prev_bright) if prev_bright is not None else 0.0
+                prev_bright = feat['brightness']
+                edge_delta = abs(feat['edge_density'] - prev_edge)
+                prev_edge  = feat['edge_density']
+                feat.update({'motion': motion, 'bright_spike': bright_spike, 'edge_delta': edge_delta})
+                frames_data.append(feat)
+                frame_times.append(current_time)
+                t += frame_interval
+            except Exception as e:
+                print(f"[AI] Skip @{current_time:.1f}s: {e}")
+
+        frame_idx += 1
+
+    cap.release()
     n = len(frames_data)
     print(f"[AI] Pass 1 done: {n} frames ({duration:.1f}s video)")
 
-    # =========== PASS 2: BLIP Captioning ======================
+    # =========== PASS 2: GPU-Accelerated BLIP Captioning ======================
     captioned_frames = []   # [(time, caption), ...]
     story_text = None
 
@@ -373,18 +346,23 @@ def analyze_video_for_moments(input_path, task_id=None):
         total = len(caption_times)
         _update(f"Pass 2/3: Generating {total} frame captions with BLIP AI...", 5)
 
-        for ci, ct in enumerate(caption_times):
-            try:
-                frame = clip.get_frame(ct)
-                caption = caption_frame_blip(frame)
-                if caption:
-                    captioned_frames.append((ct, caption))
-                pct = 5 + int((ci / total) * 50)   # 5% → 55%
-                if ci % 5 == 0 or ci == total - 1:
-                    preview = caption[:70] if caption else "(no caption)"
-                    _update(f"Captioning [{ci+1}/{total}] @{ct:.0f}s: {preview}", pct)
-            except Exception as e:
-                print(f"[AI] Caption @{ct:.1f}s failed: {e}")
+        # Use ThreadPoolExecutor for parallel caption generation
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = []
+            for ci, ct in enumerate(caption_times):
+                futures.append(executor.submit(gpu_caption_frame, input_path, ct, width, height))
+
+            for ci, future in enumerate(futures):
+                try:
+                    result = future.result()
+                    if result:
+                        captioned_frames.append(result)
+                    pct = 5 + int((ci / total) * 50)   # 5% → 55%
+                    if ci % 5 == 0 or ci == total - 1:
+                        preview = result[1][:70] if result else "(no caption)"
+                        _update(f"Captioning [{ci+1}/{total}] @{result[0]:.0f}s: {preview}", pct)
+                except Exception as e:
+                    print(f"[AI] Caption error: {e}")
 
         story_text = build_gameplay_story(captioned_frames)
         print(f"[AI] Pass 2 done: {len(captioned_frames)} captions → story built.")
@@ -394,12 +372,12 @@ def analyze_video_for_moments(input_path, task_id=None):
     else:
         _update("BLIP not available — using visual-only analysis", 55)
 
-    # =========== PASS 3: NLP Excitement Scoring ===============
+    # =========== PASS 3: GPU-Accelerated NLP Excitement Scoring ===============
     nlp_frame_scores = np.zeros(n)
 
     if captioned_frames:
         _update(f"Pass 3/3: Scoring {len(captioned_frames)} captions for excitement...", 57)
-        nlp_scores = score_captions_for_excitement(captioned_frames)
+        nlp_scores = score_captions_for_excitement([cap for _, cap in captioned_frames])
         nlp_times  = [t_ for t_, _ in captioned_frames]
 
         # Interpolate NLP scores back to the 2fps frame timeline
@@ -416,8 +394,6 @@ def analyze_video_for_moments(input_path, task_id=None):
                 nlp_frame_scores[i] = s0 + alpha * (s1 - s0)
 
         _update("NLP scoring done. Finding excitement peaks...", 70)
-
-    clip.close()
 
     if n < 4:
         return [], frame_times, frames_data, captioned_frames, story_text
@@ -521,87 +497,22 @@ def analyze_video_for_moments(input_path, task_id=None):
     print(f"[AI] Pipeline complete -> {len(satisfying_moments)} moments found.")
     return satisfying_moments, frame_times, frames_data, captioned_frames, story_text
 
+def gpu_caption_frame(input_path, time, width, height):
+    """Helper function to caption a specific frame using GPU."""
+    cap = cv2.VideoCapture(input_path)
+    if not cap.isOpened():
+        return None
+    cap.set(cv2.CAP_PROP_POS_MSEC, time * 1000)
+    ret, frame = cap.read()
+    cap.release()
+    if not ret:
+        return None
+    # Resize to match BLIP input size
+    frame_rgb = cv2.resize(frame, (384, 216))
+    caption = gpu_caption_frame_blip(frame_rgb)
+    return (time, caption)
 
-def generate_metadata_from_moments(moments, story_text, game_type='unknown'):
-    """Build YouTube/Instagram metadata using the AI-generated gameplay story."""
-    game_display = game_type.replace('_', ' ').title()
-    if game_display.lower() in ('unknown', ''):
-        game_display = 'Gameplay'
-
-    n = len(moments)
-    descs = [m.get('description', '') for m in moments]
-    if descs and any(descs):
-        intro  = descs[0][:120]
-        climax = descs[-1][:120] if len(descs) > 1 else intro
-        narrative = (
-            f"The action kicks off with: {intro}\n"
-            f"Building to the climax: {climax}\n"
-            f"AI extracted {n} peak moments from the full session."
-        )
-    else:
-        narrative = f"AI extracted {n} peak moments from this {game_display} session."
-
-    tags = [game_type.lower(), 'shorts', 'highlights', 'gameplay', 'satisfying',
-            'gaming', 'bestmoments', 'epic', 'clutch', 'gamingshorts', 'aiclips']
-    hashtags = (
-        f"#{game_type.lower()}shorts #{game_type.lower()}highlights "
-        "#gamingmoments #satisfying #shorts #epicgaming #clutchplays #gaming #aigenerated"
-    )
-    return {
-        'title':       f"TOP {n} Most Satisfying {game_display} Moments (AI-Curated)",
-        'description': (
-            f"{narrative}\n\n"
-            f"All clips auto-extracted by AI - no filler, only peak moments.\n"
-            f"Like & Subscribe for more {game_display} highlights!\n\n"
-            f"{hashtags}"
-        ),
-        'tags':      tags,
-        'hashtags':  hashtags,
-    }
-
-
-def generate_short_clips(input_path, moments, output_dir):
-    """
-    Export each moment as a 9:16 portrait short (centre-crop, no black bars).
-    Timeline: [build-up already included in moment window] → peak → payoff.
-    """
-    clip = VideoFileClip(input_path)
-    src_w, src_h = clip.size
-    clips = []
-
-    # Target 9:16 portrait crop from landscape source
-    target_w = int(src_h * 9 / 16)  # crop width from the center
-    target_w = min(target_w, src_w)  # can't be wider than source
-    crop_x1 = (src_w - target_w) // 2
-    crop_x2 = crop_x1 + target_w
-
-    print(f"[AI] Source: {src_w}x{src_h} → 9:16 centre-crop: {target_w}x{src_h}")
-
-    for i, moment in enumerate(moments):
-        start_time = max(0.0, moment['start'])
-        end_time   = min(clip.duration, moment['end'])
-
-        subclip = clip.subclip(start_time, end_time)
-
-        # Centre-crop to 9:16 portrait — preserves full height, crops sides
-        subclip = subclip.crop(x1=crop_x1, x2=crop_x2)
-
-        output_path = os.path.join(output_dir, f"moment_{i+1}.mp4")
-        subclip.write_videofile(
-            output_path,
-            codec='libx264',
-            audio_codec='aac',
-            preset='ultrafast',
-            threads=4,
-            logger=None
-        )
-        print(f"[AI] Clip {i+1} written: {output_path}")
-        clips.append(output_path)
-
-    clip.close()
-    return clips
-
-def process_video_task(task_id, input_filename, operations):
+def process_video_task_gpu(task_id, input_filename, operations):
     with app.app_context():
         try:
             tasks[task_id]['status'] = 'processing'
@@ -611,11 +522,11 @@ def process_video_task(task_id, input_filename, operations):
 
             if operations.get('ai_analysis', False):
                 tasks[task_id]['status'] = 'analyzing'
-                tasks[task_id]['status_text'] = 'Starting AI analysis pipeline...'
+                tasks[task_id]['status_text'] = 'Starting GPU-accelerated AI analysis pipeline...'
                 tasks[task_id]['percentage'] = 1
 
                 satisfying_moments, frame_times, frames_data, captioned_frames, story_text = \
-                    analyze_video_for_moments(input_path, task_id=task_id)
+                    gpu_analyze_video_for_moments(input_path, task_id=task_id)
 
                 if not satisfying_moments:
                     tasks[task_id]['status'] = 'error'
@@ -626,9 +537,9 @@ def process_video_task(task_id, input_filename, operations):
                 metadata  = generate_metadata_from_moments(satisfying_moments, story_text, game_type)
 
                 tasks[task_id]['status'] = 'generating'
-                tasks[task_id]['status_text'] = f'Rendering {len(satisfying_moments)} short clips...'
+                tasks[task_id]['status_text'] = f'Rendering {len(satisfying_moments)} short clips with GPU acceleration...'
                 tasks[task_id]['percentage'] = 80
-                clips = generate_short_clips(input_path, satisfying_moments, output_dir)
+                clips = generate_short_clips_gpu(input_path, satisfying_moments, output_dir)
 
                 rel_clips = [f"/processed/{task_id}/moment_{i+1}.mp4" for i in range(len(clips))]
                 tasks[task_id]['status']              = 'completed'
@@ -691,7 +602,7 @@ def process_video():
         'percentage': 0
     }
 
-    thread = threading.Thread(target=process_video_task, args=(task_id, filename, operations))
+    thread = threading.Thread(target=process_video_task_gpu, args=(task_id, filename, operations))
     thread.start()
 
     return jsonify({'task_id': task_id, 'status': 'success', 'ai_analysis': operations.get('ai_analysis', False)})

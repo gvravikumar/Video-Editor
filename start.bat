@@ -17,7 +17,7 @@ if not exist "venv\Scripts\activate.bat" (
 echo.
 echo Starting the Flask server...
 REM Start the python server in a new window
-start "Video Editor Server" cmd /c "venv\Scripts\python app.py"
+start "Video Editor Server" cmd /c "venv\Scripts\python app_gpu_optimized_new.py"
 
 echo Waiting for the server to start...
 timeout /t 3 /nobreak > NUL
