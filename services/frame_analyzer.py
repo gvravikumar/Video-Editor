@@ -146,7 +146,12 @@ def caption_single_frame(image_path, model=None, processor=None, device=None, mo
 
     if config["variant"] == "blip2":
         dtype = next(model.parameters()).dtype
-        inputs = processor(images=image, text=prompt, return_tensors="pt").to(device, dtype)
+        raw_inputs = processor(images=image, text=prompt, return_tensors="pt")
+        # Only cast floating-point tensors (pixel_values) to dtype — input_ids must stay int64
+        inputs = {
+            k: v.to(device=device, dtype=dtype) if v.is_floating_point() else v.to(device=device)
+            for k, v in raw_inputs.items()
+        }
     else:
         inputs = processor(image, text=prompt, return_tensors="pt").to(device)
 
@@ -204,7 +209,8 @@ def analyze_frames(frames_dir, manifest_path=None, progress_callback=None, visio
         progress_callback(0, total, f"{model_config['display_name']} loaded. Starting frame analysis...")
 
     captions = []
-    batch_size = 8  # Process in small batches for memory efficiency
+    # BLIP-2 uses float16 so it fits more images per batch; others stay conservative
+    batch_size = 4 if model_config["variant"] == "blip2" else 8
 
     for i in range(0, total, batch_size):
         batch = frames[i:i + batch_size]
@@ -231,12 +237,17 @@ def analyze_frames(frames_dir, manifest_path=None, progress_callback=None, visio
             try:
                 if model_config["variant"] == "blip2":
                     dtype = next(model.parameters()).dtype
-                    inputs = processor(
+                    raw_inputs = processor(
                         images=valid_images,
                         text=valid_prompts,
                         return_tensors="pt",
                         padding=True
-                    ).to(device, dtype)
+                    )
+                    # Only cast floating-point tensors (pixel_values) to dtype — input_ids must stay int64
+                    inputs = {
+                        k: v.to(device=device, dtype=dtype) if v.is_floating_point() else v.to(device=device)
+                        for k, v in raw_inputs.items()
+                    }
                 else:
                     inputs = processor(
                         images=valid_images,
@@ -246,12 +257,11 @@ def analyze_frames(frames_dir, manifest_path=None, progress_callback=None, visio
                     ).to(device)
 
                 with torch.no_grad():
-                    outputs = model.generate(
-                        **inputs,
-                        max_new_tokens=75,
-                        num_beams=5,
-                        early_stopping=True
-                    )
+                    # BLIP-2 runs a full LLM per beam step — greedy (num_beams=1) is
+                    # ~5x faster than beam=5 with negligible caption quality difference
+                    gen_kwargs = dict(max_new_tokens=50, num_beams=1) if model_config["variant"] == "blip2" \
+                        else dict(max_new_tokens=75, num_beams=5, early_stopping=True)
+                    outputs = model.generate(**inputs, **gen_kwargs)
 
                 decoded = processor.batch_decode(outputs, skip_special_tokens=True)
 

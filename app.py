@@ -1166,6 +1166,6 @@ if __name__ == '__main__':
     # debug-mode reloader spawns a second process.
     if not app.debug or os.environ.get('WERKZEUG_RUN_MAIN'):
         from services.model_downloader import start_startup_downloads
-        start_startup_downloads(app.config['MODELS_FOLDER'])
+        start_startup_downloads(app.config['MODELS_FOLDER'], models_to_download=["blip-large", "blip2"])
 
     app.run(debug=True, port=8000)

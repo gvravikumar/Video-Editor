@@ -181,9 +181,11 @@ def generate_short(video_path, moment, output_path, short_index=0, progress_call
         transition = create_transition_clip(0.3)
 
         # Concatenate: HOOK → transition → BUILD-UP
+        # method="chain" avoids CompositeVideoClip which can black out frames
+        # when clips have mismatched audio (ColorClip has no audio track)
         final_clip = concatenate_videoclips(
             [hook_vertical, transition, buildup_vertical],
-            method="compose"
+            method="chain"
         )
 
         if progress_callback:

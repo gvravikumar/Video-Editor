@@ -632,7 +632,7 @@ function generateAIShorts() {
     }
 
     // Get FPS value from slider
-    const fps = parseInt(document.getElementById('ai-fps-slider').value) || 2;
+    const fps = parseFloat(document.getElementById('ai-fps-slider').value) || 2;
 
     // Get selected vision model
     const visionModel = document.querySelector('input[name="vision-model"]:checked')?.value || 'blip-base';
