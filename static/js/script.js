@@ -553,6 +553,14 @@ async function selectPreviousFile(file) {
                         resumeTask(taskId);
                         return;
                     }
+                } else if (data.status === 'error') {
+                    setupEditor(file.url, metadata);
+                    const cp = _checkpointLabel(data.last_checkpoint);
+                    const errMsg = data.error ? `\n\nError: ${data.error}` : '';
+                    if (confirm(`Previous run failed (progress saved up to: ${cp}).${errMsg}\n\nResume from last checkpoint to reuse already-generated frames/data? (Cancel to start fresh)`)) {
+                        resumeTask(taskId);
+                        return;
+                    }
                 } else if (['queued', 'extracting_frames', 'analyzing_frames',
                              'generating_story', 'generating_shorts', 'generating_metadata'].includes(data.status)) {
                     setupEditor(file.url, metadata);
@@ -674,7 +682,13 @@ function pollAIProgress(taskId) {
             } else if (data.status === 'error') {
                 clearInterval(interval);
                 resetAIGenerateBtn();
-                alert('AI processing failed: ' + (data.error || 'Unknown error'));
+                const checkpoint = data.last_checkpoint;
+                const checkpointLabel = _checkpointLabel(checkpoint);
+                showResumePrompt(
+                    taskId,
+                    `Processing failed: ${data.error || 'Unknown error'}` +
+                    (checkpoint ? ` — Progress saved up to: <strong>${checkpointLabel}</strong>. Resume to skip completed steps?` : '')
+                );
             }
         })
         .catch(() => {
@@ -971,6 +985,10 @@ async function checkForExistingTasks() {
         } else if (status === 'interrupted' || data.resumable) {
             showTaskBanner(filename, taskId, 'interrupted',
                 `AI processing for <strong>${filename}</strong> was interrupted at ${data.percentage || 0}%. Resume?`);
+        } else if (status === 'error') {
+            const cp = _checkpointLabel(data.last_checkpoint);
+            showTaskBanner(filename, taskId, 'error',
+                `Previous run for <strong>${filename}</strong> failed — progress saved up to: <strong>${cp}</strong>. Resume to reuse already-generated frames?`);
         } else if (['queued', 'extracting_frames', 'analyzing_frames',
                      'generating_story', 'generating_shorts', 'generating_metadata'].includes(status)) {
             // Still running (e.g. tab was closed and reopened) — reattach
@@ -982,9 +1000,24 @@ async function checkForExistingTasks() {
 
 function showTaskBanner(filename, taskId, type, message) {
     const banner = document.getElementById('task-restore-banner');
-    const text = document.getElementById('task-restore-text');
-    const btn = document.getElementById('task-restore-btn');
+    const alert = document.getElementById('task-restore-alert');
+    const icon  = document.getElementById('task-restore-icon');
+    const text  = document.getElementById('task-restore-text');
+    const btn   = document.getElementById('task-restore-btn');
     if (!banner || !text || !btn) return;
+
+    // Visual style per type
+    const styles = {
+        completed:  { alert: 'alert-success', icon: 'bi-check-circle-fill text-success' },
+        interrupted:{ alert: 'alert-warning',  icon: 'bi-exclamation-triangle-fill text-warning' },
+        error:      { alert: 'alert-warning',  icon: 'bi-exclamation-triangle-fill text-warning' },
+        running:    { alert: 'alert-info',     icon: 'bi-arrow-clockwise text-info' },
+    };
+    const s = styles[type] || styles.running;
+    if (alert) {
+        alert.className = `alert ${s.alert} border-0 rounded-3 d-flex align-items-center shadow-sm mb-0 py-3`;
+    }
+    if (icon) icon.className = `bi ${s.icon} me-3 fs-5`;
 
     text.innerHTML = message;
 
@@ -1000,6 +1033,14 @@ function showTaskBanner(filename, taskId, type, message) {
         };
     } else if (type === 'interrupted') {
         btn.textContent = 'Resume';
+        btn.className = 'btn btn-sm btn-warning';
+        btn.onclick = async () => {
+            dismissTaskBanner();
+            await restoreFileSelection(filename);
+            resumeTask(taskId);
+        };
+    } else if (type === 'error') {
+        btn.textContent = 'Resume from checkpoint';
         btn.className = 'btn btn-sm btn-warning';
         btn.onclick = async () => {
             dismissTaskBanner();
@@ -1061,6 +1102,17 @@ async function resumeTask(taskId) {
     } catch (e) {
         alert('Failed to resume task.');
     }
+}
+
+function _checkpointLabel(checkpoint) {
+    const labels = {
+        'frames_extracted':  'Frames extracted',
+        'frames_analyzed':   'Frames analyzed',
+        'story_generated':   'Story generated',
+        'shorts_generated':  'Shorts generated',
+        'metadata_generated':'Metadata generated',
+    };
+    return labels[checkpoint] || checkpoint || 'start';
 }
 
 function showResumePrompt(taskId, reason) {

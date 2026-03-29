@@ -51,6 +51,23 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+def _compute_video_id(filepath, fps):
+    """
+    Derive a stable identifier for a (video, fps) pair.
+    Uses file size + first 1 MB of content + fps so that:
+      - the same video at the same fps always gets the same ID
+      - changing fps produces a different ID (different frame count)
+      - fast even on 2 GB files (reads only 1 MB)
+    """
+    import hashlib
+    h = hashlib.sha256()
+    h.update(str(os.path.getsize(filepath)).encode())
+    h.update(f"{fps:.1f}".encode())
+    with open(filepath, 'rb') as f:
+        h.update(f.read(1024 * 1024))   # first 1 MB fingerprint
+    return h.hexdigest()[:20]           # 20 hex chars — collision-proof in practice
+
+
 class CustomProgressBar(proglog.ProgressBarLogger):
     def __init__(self, task_id):
         super().__init__()
@@ -335,22 +352,77 @@ def generate_ai_shorts():
     except:
         fps = 2
 
-    task_id = uuid.uuid4().hex
+    input_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    task_id  = uuid.uuid4().hex
+    video_id = _compute_video_id(input_path, fps) if os.path.exists(input_path) else None
     tasks[task_id] = {
         'status': 'queued',
         'percentage': 0,
         'step': 'initializing',
-        'step_message': 'Initializing AI pipeline...'
+        'step_message': 'Initializing AI pipeline...',
+        'video_id': video_id,
     }
 
     # Start AI pipeline in background thread
-    thread = threading.Thread(target=ai_pipeline_task, args=(task_id, filename, fps))
+    thread = threading.Thread(target=ai_pipeline_task, args=(task_id, filename, fps, video_id))
     thread.start()
 
     return jsonify({'task_id': task_id, 'status': 'success'})
 
 
-def ai_pipeline_task(task_id, input_filename, fps):
+def _auto_detect_checkpoints(sm, task_id, frames_dir, stories_dir):
+    """
+    Inspect the video_id-based directories and pre-set checkpoints for any
+    steps whose output already exists on disk.  Called at the start of every
+    pipeline run so new tasks transparently reuse previous work.
+    """
+    # Step 1 — frames extracted
+    if not sm.has_checkpoint(task_id, 'frames_extracted'):
+        manifest_path = os.path.join(frames_dir, 'manifest.json')
+        if os.path.exists(manifest_path):
+            with open(manifest_path, 'r') as f:
+                m = json.load(f)
+            sm.add_checkpoint(task_id, 'frames_extracted', {
+                'frame_count': m.get('frame_count', 0),
+                'manifest_path': manifest_path
+            })
+            sm.update_task(task_id, frame_count=m.get('frame_count', 0), percentage=20)
+            logger.info(f"Task {task_id}: reusing existing frames ({m.get('frame_count')} frames)")
+
+    # Step 2 — frames analyzed
+    if not sm.has_checkpoint(task_id, 'frames_analyzed'):
+        captions_path = os.path.join(frames_dir, 'captions.json')
+        if os.path.exists(captions_path):
+            with open(captions_path, 'r') as f:
+                c = json.load(f)
+            sm.add_checkpoint(task_id, 'frames_analyzed', {
+                'captions_count': len(c.get('captions', [])),
+                'captions_path': captions_path
+            })
+            sm.update_task(task_id, percentage=60)
+            logger.info(f"Task {task_id}: reusing existing captions ({len(c.get('captions', []))} captions)")
+
+    # Step 3 — story + moments generated
+    if not sm.has_checkpoint(task_id, 'story_generated'):
+        story_path   = os.path.join(stories_dir, 'story.json')
+        moments_path = os.path.join(stories_dir, 'moments.json')
+        if os.path.exists(story_path) and os.path.exists(moments_path):
+            with open(moments_path, 'r') as f:
+                mo = json.load(f)
+            moment_count = len(mo.get('moments', []))
+            sm.add_checkpoint(task_id, 'story_generated', {
+                'moment_count': moment_count,
+                'story_path': story_path,
+                'moments_path': moments_path
+            })
+            sm.update_task(task_id, moment_count=moment_count, percentage=75)
+            logger.info(f"Task {task_id}: reusing existing story/moments ({moment_count} moments)")
+
+    # Steps 4 & 5 (shorts + metadata) are NOT auto-detected: shorts belong to
+    # a specific task_id directory, so a new task always generates fresh clips.
+
+
+def ai_pipeline_task(task_id, input_filename, fps, video_id=None):
     """
     Full AI pipeline with checkpoint-based resumption:
     1. Extract frames
@@ -358,35 +430,51 @@ def ai_pipeline_task(task_id, input_filename, fps):
     3. Generate story + detect moments
     4. Generate short videos
     5. Generate metadata for shorts
-    
-    Can resume from any checkpoint if interrupted.
+
+    Frames and story/moments are stored under video_id (stable per video+fps),
+    so the same video never re-extracts or re-analyzes frames across runs.
+    Shorts are stored under task_id so each run can produce its own clips.
     """
     with app.app_context():
         try:
-            # Get task state
             sm = get_state_manager()
             task = sm.get_task(task_id)
-            
+
             if not task:
                 logger.error(f"Task {task_id} not found in state manager")
                 return
-            
+
             input_path = os.path.join(app.config['UPLOAD_FOLDER'], input_filename)
 
-            # Create task-specific directories
-            task_frames_dir = os.path.join(app.config['FRAMES_FOLDER'], task_id)
-            task_shorts_dir = os.path.join(app.config['SHORTS_FOLDER'], task_id)
-            task_stories_dir = os.path.join(app.config['STORIES_FOLDER'], task_id)
+            # video_id may come from state (resume path) or parameter (fresh start)
+            if not video_id:
+                video_id = task.get('video_id') or _compute_video_id(input_path, fps)
 
-            os.makedirs(task_frames_dir, exist_ok=True)
-            os.makedirs(task_shorts_dir, exist_ok=True)
+            # Frames + stories: shared per (video, fps) — reused across all runs
+            # Shorts: per task_id — each run may produce different clips
+            task_frames_dir  = os.path.join(app.config['FRAMES_FOLDER'],  video_id)
+            task_stories_dir = os.path.join(app.config['STORIES_FOLDER'], video_id)
+            task_shorts_dir  = os.path.join(app.config['SHORTS_FOLDER'],  task_id)
+
+            os.makedirs(task_frames_dir,  exist_ok=True)
+            os.makedirs(task_shorts_dir,  exist_ok=True)
             os.makedirs(task_stories_dir, exist_ok=True)
 
-            # Store directory paths in state
-            sm.update_task(task_id, 
-                          task_frames_dir=task_frames_dir,
-                          task_shorts_dir=task_shorts_dir,
-                          task_stories_dir=task_stories_dir)
+            # Store directory paths + video_id in state
+            sm.update_task(task_id,
+                           video_id=video_id,
+                           task_frames_dir=task_frames_dir,
+                           task_shorts_dir=task_shorts_dir,
+                           task_stories_dir=task_stories_dir)
+
+            # ------------------------------------------------------------------
+            # Pre-flight: auto-detect already-completed steps from disk.
+            # This lets a brand-new task reuse work done by any previous run
+            # for the same video without requiring an explicit "resume".
+            # ------------------------------------------------------------------
+            _auto_detect_checkpoints(sm, task_id, task_frames_dir, task_stories_dir)
+            logger.info(f"Task {task_id}: video_id={video_id}, "
+                        f"last_checkpoint={sm.get_last_checkpoint(task_id)}")
 
             # ---- Step 1: Extract Frames ----
             manifest = None
@@ -645,7 +733,8 @@ def start_ai_pipeline():
         return jsonify({'error': 'Video file not found'}), 404
 
     task_id = uuid.uuid4().hex
-    
+    video_id = _compute_video_id(input_path, fps)
+
     # Create task in state manager
     sm = get_state_manager()
     sm.create_task(
@@ -653,20 +742,21 @@ def start_ai_pipeline():
         task_type='ai_pipeline',
         fps=fps,
         filename=filename,
+        video_id=video_id,
         step_message='Starting AI pipeline...'
     )
-    
+
     # Sync to legacy tasks dict
     tasks[task_id] = sm.get_task(task_id)
 
     thread = threading.Thread(
         target=ai_pipeline_task,
-        args=(task_id, filename, fps),
+        args=(task_id, filename, fps, video_id),
         daemon=True
     )
     thread.start()
 
-    return jsonify({'task_id': task_id, 'status': 'success', 'fps': fps})
+    return jsonify({'task_id': task_id, 'status': 'success', 'fps': fps, 'video_id': video_id})
 
 
 @app.route('/ai/tasks', methods=['GET'])
@@ -761,25 +851,26 @@ def resume_task(task_id):
     
     # Get task details
     filename = task.get('filename')
-    fps = task.get('fps', 2)
-    
+    fps      = task.get('fps', 2)
+    video_id = task.get('video_id')   # preserved from original run
+
     if not filename:
         return jsonify({'error': 'Task missing filename metadata'}), 400
-    
+
     # Reset status to queued for resumption
-    sm.update_task(task_id, 
+    sm.update_task(task_id,
                    status='queued',
                    step='resuming',
                    step_message=f'Resuming from {task.get("last_checkpoint", "last checkpoint")}...',
                    resumable=False)
-    
+
     # Sync to legacy dict
     tasks[task_id] = sm.get_task(task_id)
-    
+
     # Start the pipeline thread (it will detect checkpoints and resume)
     thread = threading.Thread(
         target=ai_pipeline_task,
-        args=(task_id, filename, fps),
+        args=(task_id, filename, fps, video_id),
         daemon=True
     )
     thread.start()
