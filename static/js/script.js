@@ -1,6 +1,6 @@
-let currentFilename = null;
-let videoDuration = 0;
-
+// ============================================================
+// State
+// ============================================================
 document.addEventListener('DOMContentLoaded', () => {
     const dropZone = document.getElementById('drop-zone');
     const videoInput = document.getElementById('video-input');

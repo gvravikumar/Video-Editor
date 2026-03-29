@@ -19,3 +19,26 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# Project data directories
+uploads/
+processed/
+frames/
+shorts/
+stories/
+
+# AI Models (large files - download on first run)
+models/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# PyTorch / HuggingFace cache
+.cache/
+*.bin
+*.safetensors
