@@ -282,6 +282,17 @@ class StateManager:
         )
         logger.error(f"Task {task_id} failed: {error}")
     
+    def clear_all_tasks(self):
+        """Delete all task states from memory and disk (used by cache clear)."""
+        with self.lock:
+            task_ids = list(self._in_memory_cache.keys())
+            for task_id in task_ids:
+                state_file = self._get_state_file(task_id)
+                if state_file.exists():
+                    state_file.unlink()
+            self._in_memory_cache.clear()
+            logger.info("All task states cleared")
+
     def delete_task(self, task_id: str):
         """Delete a task and its state file."""
         with self.lock:

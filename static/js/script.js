@@ -1091,3 +1091,110 @@ function updateFpsEstimates(fpsValue) {
         if (timeEl) timeEl.textContent = '—';
     }
 }
+
+// ============================================================
+// Cache Clear
+// ============================================================
+
+function openCacheClearModal() {
+    const modal = new bootstrap.Modal(document.getElementById('cacheClearModal'));
+
+    // Reset to loading state
+    document.getElementById('cache-info-loading').classList.remove('d-none');
+    document.getElementById('cache-info-content').classList.add('d-none');
+    document.getElementById('cache-clear-confirm-btn').disabled = true;
+
+    modal.show();
+
+    // Fetch cache sizes
+    fetch('/cache/info')
+        .then(r => r.json())
+        .then(data => {
+            const fmt = mb => mb >= 1024
+                ? `${(mb / 1024).toFixed(1)} GB`
+                : `${mb} MB`;
+
+            document.getElementById('cache-frames-size').textContent  = fmt(data.folders.frames.size_mb);
+            document.getElementById('cache-shorts-size').textContent  = fmt(data.folders.shorts.size_mb);
+            document.getElementById('cache-stories-size').textContent = fmt(data.folders.stories.size_mb);
+            document.getElementById('cache-total-size').textContent   = fmt(data.total_mb);
+
+            document.getElementById('cache-info-loading').classList.add('d-none');
+            document.getElementById('cache-info-content').classList.remove('d-none');
+
+            // Only enable confirm if there's actually something to clear
+            document.getElementById('cache-clear-confirm-btn').disabled = data.total_mb === 0;
+            if (data.total_mb === 0) {
+                document.getElementById('cache-clear-confirm-btn').textContent = 'Nothing to clear';
+            }
+        })
+        .catch(() => {
+            document.getElementById('cache-info-loading').textContent = 'Failed to load cache info.';
+        });
+}
+
+function confirmCacheClear() {
+    const btn = document.getElementById('cache-clear-confirm-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status"></span> Moving to Trash…';
+
+    fetch('/cache/clear', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            bootstrap.Modal.getInstance(document.getElementById('cacheClearModal')).hide();
+
+            const moved = data.moved && data.moved.length > 0
+                ? data.moved.join(', ')
+                : 'nothing';
+
+            showToast(
+                data.status === 'success'
+                    ? `Moved to Trash: ${moved}. Task history cleared.`
+                    : `Partial clear: ${data.message}`,
+                data.status === 'success' ? 'success' : 'warning'
+            );
+
+            // Reload the uploads list so cleared tasks no longer show statuses
+            if (typeof loadPreviousUploads === 'function') loadPreviousUploads();
+        })
+        .catch(() => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-trash3 me-2"></i> Move to Trash';
+            showToast('Failed to clear cache. Check server logs.', 'danger');
+        });
+}
+
+function showToast(message, type = 'success') {
+    // Create a bootstrap toast dynamically
+    const toastId = 'toast-' + Date.now();
+    const iconMap = { success: 'check-circle-fill', warning: 'exclamation-triangle-fill', danger: 'x-circle-fill' };
+    const colorMap = { success: 'text-success', warning: 'text-warning', danger: 'text-danger' };
+
+    const html = `
+        <div id="${toastId}" class="toast align-items-center border-0 bg-surface text-white rounded-3 shadow"
+             role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="d-flex">
+                <div class="toast-body d-flex align-items-center gap-2">
+                    <i class="bi bi-${iconMap[type] || 'info-circle-fill'} ${colorMap[type] || 'text-info'}"></i>
+                    ${message}
+                </div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+            </div>
+        </div>`;
+
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        container.className = 'toast-container position-fixed bottom-0 end-0 p-3';
+        container.style.zIndex = '9999';
+        document.body.appendChild(container);
+    }
+
+    container.insertAdjacentHTML('beforeend', html);
+    const toastEl = document.getElementById(toastId);
+    const toast = new bootstrap.Toast(toastEl, { delay: 4000 });
+    toast.show();
+    toastEl.addEventListener('hidden.bs.toast', () => toastEl.remove());
+}
+

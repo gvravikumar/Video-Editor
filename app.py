@@ -893,6 +893,96 @@ def ai_results(task_id):
 
 
 # ============================================================
+# ROUTES - Cache Management
+# ============================================================
+
+def _folder_size_mb(folder):
+    """Return total size of a folder in MB."""
+    total = 0
+    if os.path.exists(folder):
+        for dirpath, _, filenames in os.walk(folder):
+            for f in filenames:
+                try:
+                    total += os.path.getsize(os.path.join(dirpath, f))
+                except OSError:
+                    pass
+    return round(total / (1024 * 1024), 1)
+
+
+@app.route('/cache/info', methods=['GET'])
+def cache_info():
+    """Return size of each cache folder so the UI can show what will be cleared."""
+    folders = {
+        'frames': app.config['FRAMES_FOLDER'],
+        'shorts': app.config['SHORTS_FOLDER'],
+        'stories': app.config['STORIES_FOLDER'],
+    }
+    info = {}
+    total_mb = 0.0
+    for name, path in folders.items():
+        mb = _folder_size_mb(path)
+        info[name] = {'path': path, 'size_mb': mb}
+        total_mb += mb
+    return jsonify({'folders': info, 'total_mb': round(total_mb, 1)})
+
+
+@app.route('/cache/clear', methods=['POST'])
+def cache_clear():
+    """
+    Move generated cache folders (frames, shorts, stories) to the OS trash/bin.
+    State tasks are also cleared so the UI starts fresh.
+    The original uploads folder is left untouched.
+    """
+    from send2trash import send2trash
+
+    folders = {
+        'frames': app.config['FRAMES_FOLDER'],
+        'shorts': app.config['SHORTS_FOLDER'],
+        'stories': app.config['STORIES_FOLDER'],
+    }
+
+    moved = []
+    errors = []
+
+    for name, folder_path in folders.items():
+        if not os.path.exists(folder_path):
+            continue
+        # Only trash if there is something inside
+        contents = os.listdir(folder_path)
+        if not contents:
+            continue
+        try:
+            # Move the *contents* to trash so the empty folder remains
+            # (app expects the folder to exist on next run)
+            for item in contents:
+                item_path = os.path.join(folder_path, item)
+                send2trash(item_path)
+            moved.append(name)
+            logger.info(f"Cache clear: moved {name} contents to trash")
+        except Exception as e:
+            errors.append({'folder': name, 'error': str(e)})
+            logger.error(f"Cache clear: failed to move {name}: {e}")
+
+    # Clear all task state so the sidebar shows no stale tasks
+    sm = get_state_manager()
+    sm.clear_all_tasks()
+
+    if errors:
+        return jsonify({
+            'status': 'partial',
+            'moved': moved,
+            'errors': errors,
+            'message': f"Moved {len(moved)} folder(s) to trash. {len(errors)} error(s)."
+        }), 207
+
+    return jsonify({
+        'status': 'success',
+        'moved': moved,
+        'message': f"Moved to trash: {', '.join(moved) if moved else 'nothing to clear'}."
+    })
+
+
+# ============================================================
 # ROUTES - Task Status (existing)
 # ============================================================
 
