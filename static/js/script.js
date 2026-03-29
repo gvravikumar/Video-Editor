@@ -1,9 +1,15 @@
 // ============================================================
 // State
 // ============================================================
+let currentFilename = null;
+let videoDuration = 0;
+
 document.addEventListener('DOMContentLoaded', () => {
     const dropZone = document.getElementById('drop-zone');
     const videoInput = document.getElementById('video-input');
+
+    // Load previously uploaded files
+    loadPreviousUploads();
     
     // Drag & Drop Handlers
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
@@ -309,4 +315,98 @@ function pollTaskStatus(taskId) {
             console.error(error);
         });
     }, 1500);
+}
+
+// ============================================================
+// Previously Uploaded Files
+// ============================================================
+
+function loadPreviousUploads() {
+    fetch('/uploads/list')
+        .then(response => response.json())
+        .then(data => {
+            if (data.files && data.files.length > 0) {
+                displayPreviousFiles(data.files);
+            }
+        })
+        .catch(error => {
+            console.error('Error loading previous uploads:', error);
+        });
+}
+
+function displayPreviousFiles(files) {
+    const container = document.getElementById('previous-files-container');
+    const listElement = document.getElementById('previous-files-list');
+
+    listElement.innerHTML = '';
+
+    files.forEach(file => {
+        const fileItem = createFileListItem(file);
+        listElement.appendChild(fileItem);
+    });
+
+    container.classList.remove('d-none');
+}
+
+function createFileListItem(file) {
+    const item = document.createElement('a');
+    item.href = '#';
+    item.className = 'list-group-item list-group-item-action bg-surface border-darker text-white hover-highlight';
+    item.onclick = (e) => {
+        e.preventDefault();
+        selectPreviousFile(file);
+    };
+
+    // Format duration
+    let durationStr = 'Unknown';
+    let resolutionStr = 'Unknown';
+    if (file.metadata) {
+        const dur = file.metadata.duration;
+        durationStr = new Date(dur * 1000).toISOString().substr(11, 8);
+        resolutionStr = `${file.metadata.resolution[0]}x${file.metadata.resolution[1]}`;
+    }
+
+    // Format modified date
+    const modDate = new Date(file.modified * 1000);
+    const dateStr = modDate.toLocaleDateString() + ' ' + modDate.toLocaleTimeString();
+
+    item.innerHTML = `
+        <div class="d-flex justify-content-between align-items-start">
+            <div class="flex-grow-1">
+                <div class="d-flex align-items-center mb-2">
+                    <i class="bi bi-file-play-fill text-primary me-2 fs-5"></i>
+                    <h6 class="mb-0 fw-semibold">${file.filename}</h6>
+                </div>
+                <div class="d-flex gap-3 small text-muted">
+                    <span><i class="bi bi-clock me-1"></i> ${durationStr}</span>
+                    <span><i class="bi bi-aspect-ratio me-1"></i> ${resolutionStr}</span>
+                    <span><i class="bi bi-hdd me-1"></i> ${file.size_mb} MB</span>
+                </div>
+            </div>
+            <div class="text-end text-muted small">
+                <div><i class="bi bi-calendar3 me-1"></i> ${dateStr}</div>
+                <div class="mt-1">
+                    <span class="badge bg-primary">Click to use</span>
+                </div>
+            </div>
+        </div>
+    `;
+
+    return item;
+}
+
+function selectPreviousFile(file) {
+    // Set current filename
+    currentFilename = file.filename;
+
+    // Create metadata object
+    const metadata = {
+        duration: file.metadata ? file.metadata.duration : 0,
+        resolution: file.metadata ? file.metadata.resolution : [0, 0],
+        fps: file.metadata ? file.metadata.fps : 0,
+        format: file.filename.split('.').pop().toUpperCase()
+    };
+
+    // Setup editor with the selected file
+    setupEditor(file.url, metadata);
 }

@@ -485,3 +485,22 @@ video::-webkit-media-controls-panel {
         max-height: 300px;
     }
 }
+
+/* ============================================================
+   Previous Files List
+   ============================================================ */
+
+.hover-highlight {
+    transition: all 0.2s ease;
+}
+
+.hover-highlight:hover {
+    background-color: rgba(var(--bs-primary-rgb), 0.1) !important;
+    border-color: var(--bs-primary) !important;
+    transform: translateX(5px);
+}
+
+#previous-files-list .list-group-item {
+    margin-bottom: 0.75rem;
+    border-radius: 0.5rem !important;
+}

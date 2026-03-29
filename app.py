@@ -84,6 +84,52 @@ def serve_upload(filename):
     return send_file(os.path.join(app.config['UPLOAD_FOLDER'], filename))
 
 
+@app.route('/uploads/list')
+def list_uploads():
+    """List all previously uploaded videos."""
+    try:
+        upload_folder = app.config['UPLOAD_FOLDER']
+        if not os.path.exists(upload_folder):
+            return jsonify({'files': []})
+
+        files = []
+        for filename in os.listdir(upload_folder):
+            filepath = os.path.join(upload_folder, filename)
+            if os.path.isfile(filepath) and allowed_file(filename):
+                # Get file info
+                stat = os.stat(filepath)
+                size_mb = stat.st_size / (1024 * 1024)
+                modified = stat.st_mtime
+
+                # Try to get video metadata
+                try:
+                    clip = VideoFileClip(filepath)
+                    metadata = {
+                        'duration': clip.duration,
+                        'resolution': clip.size,
+                        'fps': clip.fps
+                    }
+                    clip.close()
+                except:
+                    metadata = None
+
+                files.append({
+                    'filename': filename,
+                    'size_mb': round(size_mb, 2),
+                    'modified': modified,
+                    'metadata': metadata,
+                    'url': url_for('serve_upload', filename=filename)
+                })
+
+        # Sort by modified time (newest first)
+        files.sort(key=lambda x: x['modified'], reverse=True)
+
+        return jsonify({'files': files})
+    except Exception as e:
+        logger.error(f"Error listing uploads: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/processed/<filename>')
 def serve_processed(filename):
     return send_file(os.path.join(app.config['PROCESSED_FOLDER'], filename))
