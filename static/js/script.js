@@ -451,7 +451,7 @@ function generateAIShorts() {
 
     // Hide editor, show AI progress
     document.getElementById('editor-section').classList.add('d-none');
-    document.getElementById('ai-progress-section').classList.remove('d-none');
+    document.getElementById('ai-progress-container').classList.remove('d-none');
 
     // Reset AI progress
     resetAIProgress();
@@ -474,7 +474,7 @@ function generateAIShorts() {
             btn.disabled = false;
             btn.innerHTML = '<i class="bi bi-stars me-2"></i> Generate AI Shorts';
             document.getElementById('editor-section').classList.remove('d-none');
-            document.getElementById('ai-progress-section').classList.add('d-none');
+            document.getElementById('ai-progress-container').classList.add('d-none');
         } else {
             // Start polling for progress
             pollAIProgress(data.task_id);
@@ -485,7 +485,7 @@ function generateAIShorts() {
         btn.disabled = false;
         btn.innerHTML = '<i class="bi bi-stars me-2"></i> Generate AI Shorts';
         document.getElementById('editor-section').classList.remove('d-none');
-        document.getElementById('ai-progress-section').classList.add('d-none');
+        document.getElementById('ai-progress-container').classList.add('d-none');
     });
 }
 
@@ -532,29 +532,78 @@ function pollAIProgress(taskId) {
 }
 
 function updateAIStep(step, percentage, message) {
-    // Update step indicators based on current step
-    const steps = ['extracting_frames', 'analyzing_frames', 'generating_story', 'detecting_moments', 'generating_shorts', 'generating_metadata'];
-
     // Update progress bar
-    document.getElementById('ai-overall-progress').style.width = percentage + '%';
-    document.getElementById('ai-overall-percentage').innerText = percentage + '%';
-
-    // Update status message
+    const progressBar = document.getElementById('ai-progress');
+    const percentageDisplay = document.getElementById('ai-percentage');
     const statusText = document.getElementById('ai-status-text');
+    const stepText = document.getElementById('ai-step-text');
+
+    if (progressBar) {
+        progressBar.style.width = percentage + '%';
+    }
+
+    if (percentageDisplay) {
+        percentageDisplay.innerText = percentage + '%';
+    }
+
     if (statusText) {
         statusText.innerText = message || 'Processing...';
     }
 
-    // Update step-specific UI elements (if you have them in HTML)
-    // This is a placeholder - you can enhance based on your HTML structure
+    if (stepText) {
+        // Show current step name
+        const stepNames = {
+            'extracting_frames': 'Extracting Frames',
+            'analyzing_frames': 'AI Analyzing Frames',
+            'generating_story': 'Generating Story',
+            'detecting_moments': 'Detecting Moments',
+            'generating_shorts': 'Creating Short Videos',
+            'generating_metadata': 'Generating Metadata'
+        };
+        stepText.innerText = stepNames[step] || step;
+    }
+
+    // Highlight current step icon
+    highlightPipelineStep(step);
+}
+
+function highlightPipelineStep(step) {
+    // Reset all steps
+    const stepIds = ['step-extract', 'step-analyze', 'step-story', 'step-shorts', 'step-metadata'];
+    stepIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.classList.remove('text-primary', 'text-success');
+            el.classList.add('text-muted');
+        }
+    });
+
+    // Highlight current step
+    const stepMap = {
+        'extracting_frames': 'step-extract',
+        'analyzing_frames': 'step-analyze',
+        'generating_story': 'step-story',
+        'detecting_moments': 'step-story',
+        'generating_shorts': 'step-shorts',
+        'generating_metadata': 'step-metadata'
+    };
+
+    const currentStepId = stepMap[step];
+    if (currentStepId) {
+        const el = document.getElementById(currentStepId);
+        if (el) {
+            el.classList.remove('text-muted');
+            el.classList.add('text-primary');
+        }
+    }
 }
 
 function showAIResults(data) {
     // Hide progress section
-    document.getElementById('ai-progress-section').classList.add('d-none');
+    document.getElementById('ai-progress-container').classList.add('d-none');
 
     // Show results section
-    document.getElementById('ai-results-section').classList.remove('d-none');
+    document.getElementById('results-section').classList.remove('d-none');
 
     // Load and display shorts
     if (data.shorts && data.shorts.length > 0) {
