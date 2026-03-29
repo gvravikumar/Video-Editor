@@ -172,11 +172,16 @@ def generate_all_metadata(shorts, output_dir, progress_callback=None):
 
     # Save enriched metadata
     metadata_path = os.path.join(output_dir, "shorts_with_metadata.json")
+    enriched_shorts_path = os.path.join(output_dir, "enriched_shorts.json")
     with open(metadata_path, "w") as f:
         json.dump({
             "total": len(enriched_shorts),
             "shorts": enriched_shorts
         }, f, indent=2)
+    
+    # Also save in the format expected by resume logic
+    with open(enriched_shorts_path, "w") as f:
+        json.dump(enriched_shorts, f, indent=2)
 
     if progress_callback:
         progress_callback(total, total, "Metadata generation complete!")

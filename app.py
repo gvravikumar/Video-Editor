@@ -28,16 +28,22 @@ app.config['FRAMES_FOLDER'] = os.path.join(BASE_DIR, 'frames')
 app.config['SHORTS_FOLDER'] = os.path.join(BASE_DIR, 'shorts')
 app.config['STORIES_FOLDER'] = os.path.join(BASE_DIR, 'stories')
 app.config['MODELS_FOLDER'] = os.path.join(BASE_DIR, 'models')
+app.config['STATE_FOLDER'] = os.path.join(BASE_DIR, 'state')
 app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024 * 1024  # 2 GB limit for large gameplay videos
 
 # Create all directories
 for folder in ['UPLOAD_FOLDER', 'PROCESSED_FOLDER', 'FRAMES_FOLDER',
-               'SHORTS_FOLDER', 'STORIES_FOLDER', 'MODELS_FOLDER']:
+               'SHORTS_FOLDER', 'STORIES_FOLDER', 'MODELS_FOLDER', 'STATE_FOLDER']:
     os.makedirs(app.config[folder], exist_ok=True)
 
 ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv', 'webm'}
 
-# Task tracking for all operations
+# Initialize State Manager for persistent task tracking
+from services.state_manager import init_state_manager, get_state_manager
+state_manager = init_state_manager(app.config['STATE_FOLDER'])
+
+# Legacy task dictionary (for backward compatibility with existing code)
+# Will be gradually migrated to state_manager
 tasks = {}
 
 
@@ -84,47 +90,86 @@ def serve_upload(filename):
     return send_file(os.path.join(app.config['UPLOAD_FOLDER'], filename))
 
 
+def _get_video_metadata_fast(filepath):
+    """
+    Extract video metadata using ffprobe (bundled with FFmpeg/MoviePy).
+    ~50ms per file vs 2-5s with VideoFileClip — critical for listing many videos.
+    """
+    import subprocess
+    try:
+        result = subprocess.run(
+            [
+                'ffprobe', '-v', 'quiet',
+                '-print_format', 'json',
+                '-show_streams', '-show_format',
+                filepath
+            ],
+            capture_output=True, text=True, timeout=8
+        )
+        info = json.loads(result.stdout)
+        duration = float(info.get('format', {}).get('duration', 0))
+        video_stream = next(
+            (s for s in info.get('streams', []) if s.get('codec_type') == 'video'),
+            None
+        )
+        if video_stream:
+            width = int(video_stream.get('width', 0))
+            height = int(video_stream.get('height', 0))
+            fps_str = video_stream.get('r_frame_rate', '30/1')
+            num, den = fps_str.split('/') if '/' in fps_str else (fps_str, '1')
+            fps = round(float(num) / float(den), 2)
+            return {'duration': duration, 'resolution': [width, height], 'fps': fps}
+    except Exception as e:
+        logger.debug(f"ffprobe metadata failed for {filepath}: {e}")
+    return None
+
+
 @app.route('/uploads/list')
 def list_uploads():
-    """List all previously uploaded videos."""
+    """List all previously uploaded videos with their latest task state."""
     try:
         upload_folder = app.config['UPLOAD_FOLDER']
         if not os.path.exists(upload_folder):
             return jsonify({'files': []})
 
+        # Build filename → most-recent task map from state manager
+        sm = get_state_manager()
+        all_tasks = sm.get_all_tasks()
+        filename_task_map = {}
+        for task in all_tasks.values():
+            fname = task.get('filename')
+            if fname:
+                existing = filename_task_map.get(fname)
+                if not existing or task.get('created_at', '') > existing.get('created_at', ''):
+                    filename_task_map[fname] = task
+
         files = []
         for filename in os.listdir(upload_folder):
             filepath = os.path.join(upload_folder, filename)
-            if os.path.isfile(filepath) and allowed_file(filename):
-                # Get file info
-                stat = os.stat(filepath)
-                size_mb = stat.st_size / (1024 * 1024)
-                modified = stat.st_mtime
+            if not os.path.isfile(filepath) or not allowed_file(filename):
+                continue
 
-                # Try to get video metadata
-                try:
-                    clip = VideoFileClip(filepath)
-                    metadata = {
-                        'duration': clip.duration,
-                        'resolution': clip.size,
-                        'fps': clip.fps
-                    }
-                    clip.close()
-                except:
-                    metadata = None
+            stat = os.stat(filepath)
+            size_mb = stat.st_size / (1024 * 1024)
+            modified = stat.st_mtime
 
-                files.append({
-                    'filename': filename,
-                    'size_mb': round(size_mb, 2),
-                    'modified': modified,
-                    'metadata': metadata,
-                    'url': url_for('serve_upload', filename=filename)
-                })
+            # Fast metadata via ffprobe — no video decoding required
+            metadata = _get_video_metadata_fast(filepath)
 
-        # Sort by modified time (newest first)
+            task_info = filename_task_map.get(filename)
+            files.append({
+                'filename': filename,
+                'size_mb': round(size_mb, 2),
+                'modified': modified,
+                'metadata': metadata,
+                'url': url_for('serve_upload', filename=filename),
+                'task_id': task_info.get('task_id') if task_info else None,
+                'task_status': task_info.get('status') if task_info else None,
+                'task_percentage': task_info.get('percentage', 0) if task_info else 0,
+            })
+
         files.sort(key=lambda x: x['modified'], reverse=True)
-
-        return jsonify({'files': files})
+        return jsonify({'files': files, 'total': len(files)})
     except Exception as e:
         logger.error(f"Error listing uploads: {e}")
         return jsonify({'error': str(e)}), 500
@@ -307,18 +352,25 @@ def generate_ai_shorts():
 
 def ai_pipeline_task(task_id, input_filename, fps):
     """
-    Full AI pipeline:
+    Full AI pipeline with checkpoint-based resumption:
     1. Extract frames
     2. Analyze frames (BLIP captioning)
     3. Generate story + detect moments
     4. Generate short videos
     5. Generate metadata for shorts
+    
+    Can resume from any checkpoint if interrupted.
     """
     with app.app_context():
         try:
-            tasks[task_id]['status'] = 'extracting_frames'
-            tasks[task_id]['percentage'] = 0
-
+            # Get task state
+            sm = get_state_manager()
+            task = sm.get_task(task_id)
+            
+            if not task:
+                logger.error(f"Task {task_id} not found in state manager")
+                return
+            
             input_path = os.path.join(app.config['UPLOAD_FOLDER'], input_filename)
 
             # Create task-specific directories
@@ -330,113 +382,222 @@ def ai_pipeline_task(task_id, input_filename, fps):
             os.makedirs(task_shorts_dir, exist_ok=True)
             os.makedirs(task_stories_dir, exist_ok=True)
 
+            # Store directory paths in state
+            sm.update_task(task_id, 
+                          task_frames_dir=task_frames_dir,
+                          task_shorts_dir=task_shorts_dir,
+                          task_stories_dir=task_stories_dir)
+
             # ---- Step 1: Extract Frames ----
-            from services.frame_extractor import extract_frames
+            manifest = None
+            if not sm.has_checkpoint(task_id, 'frames_extracted'):
+                from services.frame_extractor import extract_frames
+                
+                sm.update_task(task_id, status='extracting_frames', percentage=0, step='extracting_frames')
+                tasks[task_id] = sm.get_task(task_id)  # Sync legacy dict
 
-            def frame_progress(current, total, msg):
-                if total > 0:
-                    step_pct = int((current / total) * 20)  # 0-20%
-                else:
-                    step_pct = 0
-                tasks[task_id]['percentage'] = step_pct
-                tasks[task_id]['step_message'] = msg
-                tasks[task_id]['step'] = 'extracting_frames'
+                def frame_progress(current, total, msg):
+                    if total > 0:
+                        step_pct = int((current / total) * 20)  # 0-20%
+                    else:
+                        step_pct = 0
+                    sm.update_task(task_id, percentage=step_pct, step_message=msg, step='extracting_frames')
+                    tasks[task_id] = sm.get_task(task_id)
 
-            manifest = extract_frames(
-                input_path, task_frames_dir, fps=fps,
-                progress_callback=frame_progress
-            )
+                logger.info(f"Task {task_id}: Starting frame extraction...")
+                manifest = extract_frames(
+                    input_path, task_frames_dir, fps=fps,
+                    progress_callback=frame_progress
+                )
 
-            tasks[task_id]['frame_count'] = manifest['frame_count']
-            tasks[task_id]['percentage'] = 20
-            tasks[task_id]['status'] = 'analyzing_frames'
+                sm.add_checkpoint(task_id, 'frames_extracted', {
+                    'frame_count': manifest['frame_count'],
+                    'manifest_path': os.path.join(task_frames_dir, 'manifest.json')
+                })
+                sm.update_task(task_id, frame_count=manifest['frame_count'], percentage=20)
+                tasks[task_id] = sm.get_task(task_id)
+                logger.info(f"Task {task_id}: Frame extraction complete ({manifest['frame_count']} frames)")
+            else:
+                # Resume: Load existing manifest
+                logger.info(f"Task {task_id}: Resuming - frames already extracted")
+                manifest_path = os.path.join(task_frames_dir, 'manifest.json')
+                if os.path.exists(manifest_path):
+                    with open(manifest_path, 'r') as f:
+                        manifest = json.load(f)
+                    sm.update_task(task_id, frame_count=manifest['frame_count'], percentage=20)
+                    tasks[task_id] = sm.get_task(task_id)
 
             # ---- Step 2: Analyze Frames (BLIP) ----
-            from services.frame_analyzer import analyze_frames
+            captions_data = None
+            if not sm.has_checkpoint(task_id, 'frames_analyzed'):
+                from services.frame_analyzer import analyze_frames
+                
+                sm.update_task(task_id, status='analyzing_frames', step='analyzing_frames')
+                tasks[task_id] = sm.get_task(task_id)
 
-            def analyze_progress(current, total, msg):
-                if total > 0:
-                    step_pct = 20 + int((current / total) * 40)  # 20-60%
-                else:
-                    step_pct = 20
-                tasks[task_id]['percentage'] = step_pct
-                tasks[task_id]['step_message'] = msg
-                tasks[task_id]['step'] = 'analyzing_frames'
+                def analyze_progress(current, total, msg):
+                    if total > 0:
+                        step_pct = 20 + int((current / total) * 40)  # 20-60%
+                    else:
+                        step_pct = 20
+                    sm.update_task(task_id, percentage=step_pct, step_message=msg, step='analyzing_frames')
+                    tasks[task_id] = sm.get_task(task_id)
 
-            captions_data = analyze_frames(
-                task_frames_dir,
-                progress_callback=analyze_progress
-            )
+                logger.info(f"Task {task_id}: Starting frame analysis...")
+                captions_data = analyze_frames(
+                    task_frames_dir,
+                    progress_callback=analyze_progress
+                )
 
-            tasks[task_id]['percentage'] = 60
-            tasks[task_id]['status'] = 'generating_story'
+                sm.add_checkpoint(task_id, 'frames_analyzed', {
+                    'captions_count': len(captions_data.get('captions', [])),
+                    'captions_path': os.path.join(task_frames_dir, 'captions.json')
+                })
+                sm.update_task(task_id, percentage=60)
+                tasks[task_id] = sm.get_task(task_id)
+                logger.info(f"Task {task_id}: Frame analysis complete")
+            else:
+                # Resume: Load existing captions
+                logger.info(f"Task {task_id}: Resuming - frames already analyzed")
+                sm.update_task(task_id, percentage=60)
+                tasks[task_id] = sm.get_task(task_id)
 
             # ---- Step 3: Generate Story + Detect Moments ----
-            from services.story_generator import generate_full_analysis
+            analysis = None
+            if not sm.has_checkpoint(task_id, 'story_generated'):
+                from services.story_generator import generate_full_analysis
 
-            captions_path = os.path.join(task_frames_dir, "captions.json")
+                sm.update_task(task_id, status='generating_story', step='generating_story')
+                tasks[task_id] = sm.get_task(task_id)
 
-            def story_progress(current, total, msg):
-                if total > 0:
-                    step_pct = 60 + int((current / total) * 15)  # 60-75%
+                captions_path = os.path.join(task_frames_dir, "captions.json")
+
+                def story_progress(current, total, msg):
+                    if total > 0:
+                        step_pct = 60 + int((current / total) * 15)  # 60-75%
+                    else:
+                        step_pct = 60
+                    sm.update_task(task_id, percentage=step_pct, step_message=msg, step='generating_story')
+                    tasks[task_id] = sm.get_task(task_id)
+
+                logger.info(f"Task {task_id}: Starting story generation...")
+                analysis = generate_full_analysis(
+                    captions_path, task_stories_dir,
+                    progress_callback=story_progress
+                )
+
+                sm.add_checkpoint(task_id, 'story_generated', {
+                    'moment_count': len(analysis['moments']),
+                    'story_path': os.path.join(task_stories_dir, 'story.json'),
+                    'moments_path': os.path.join(task_stories_dir, 'moments.json')
+                })
+                sm.update_task(task_id, moment_count=len(analysis['moments']), percentage=75)
+                tasks[task_id] = sm.get_task(task_id)
+                logger.info(f"Task {task_id}: Story generation complete ({len(analysis['moments'])} moments)")
+            else:
+                # Resume: reconstruct analysis from story.json + moments.json
+                logger.info(f"Task {task_id}: Resuming - story already generated")
+                story_path = os.path.join(task_stories_dir, 'story.json')
+                moments_path = os.path.join(task_stories_dir, 'moments.json')
+                analysis = None
+                if os.path.exists(story_path) and os.path.exists(moments_path):
+                    with open(story_path, 'r') as f:
+                        story_data = json.load(f)
+                    with open(moments_path, 'r') as f:
+                        moments_data = json.load(f)
+                    analysis = {
+                        'story': story_data,
+                        'moments': moments_data.get('moments', [])
+                    }
+                if analysis:
+                    sm.update_task(task_id, moment_count=len(analysis['moments']), percentage=75)
+                    tasks[task_id] = sm.get_task(task_id)
                 else:
-                    step_pct = 60
-                tasks[task_id]['percentage'] = step_pct
-                tasks[task_id]['step_message'] = msg
-                tasks[task_id]['step'] = 'generating_story'
+                    # Files missing — clear checkpoint so this stage re-runs on next attempt
+                    logger.warning(f"Task {task_id}: story/moments files missing, clearing checkpoint to re-run")
+                    sm.remove_checkpoint(task_id, 'story_generated')
 
-            analysis = generate_full_analysis(
-                captions_path, task_stories_dir,
-                progress_callback=story_progress
-            )
-
-            tasks[task_id]['moment_count'] = len(analysis['moments'])
-            tasks[task_id]['percentage'] = 75
-            tasks[task_id]['status'] = 'generating_shorts'
+            # Guard: analysis must be populated before Step 4
+            if analysis is None:
+                raise RuntimeError(
+                    "Story/moments data could not be loaded. "
+                    "The checkpoint has been cleared — resume the task to re-run story generation."
+                )
 
             # ---- Step 4: Generate Short Videos ----
-            from services.short_generator import generate_all_shorts
+            shorts = None
+            if not sm.has_checkpoint(task_id, 'shorts_generated'):
+                from services.short_generator import generate_all_shorts
 
-            def shorts_progress(current, total, msg):
-                if total > 0:
-                    step_pct = 75 + int((current / total) * 15)  # 75-90%
-                else:
-                    step_pct = 75
-                tasks[task_id]['percentage'] = step_pct
-                tasks[task_id]['step_message'] = msg
-                tasks[task_id]['step'] = 'generating_shorts'
+                sm.update_task(task_id, status='generating_shorts', step='generating_shorts')
+                tasks[task_id] = sm.get_task(task_id)
+                
+                def shorts_progress(current, total, msg):
+                    if total > 0:
+                        step_pct = 75 + int((current / total) * 15)  # 75-90%
+                    else:
+                        step_pct = 75
+                    sm.update_task(task_id, percentage=step_pct, step_message=msg, step='generating_shorts')
+                    tasks[task_id] = sm.get_task(task_id)
 
-            shorts = generate_all_shorts(
-                input_path, analysis['moments'], task_shorts_dir,
-                progress_callback=shorts_progress
-            )
+                logger.info(f"Task {task_id}: Starting shorts generation...")
+                shorts = generate_all_shorts(
+                    input_path, analysis['moments'], task_shorts_dir,
+                    progress_callback=shorts_progress
+                )
 
-            tasks[task_id]['percentage'] = 90
-            tasks[task_id]['status'] = 'generating_metadata'
+                sm.add_checkpoint(task_id, 'shorts_generated', {
+                    'shorts_count': len(shorts)
+                })
+                sm.update_task(task_id, percentage=90)
+                tasks[task_id] = sm.get_task(task_id)
+                logger.info(f"Task {task_id}: Shorts generation complete")
+            else:
+                # Resume: Load existing shorts
+                logger.info(f"Task {task_id}: Resuming - shorts already generated")
+                shorts_manifest_path = os.path.join(task_shorts_dir, 'shorts_manifest.json')
+                if os.path.exists(shorts_manifest_path):
+                    with open(shorts_manifest_path, 'r') as f:
+                        shorts = json.load(f)
+                sm.update_task(task_id, percentage=90)
+                tasks[task_id] = sm.get_task(task_id)
 
             # ---- Step 5: Generate Metadata ----
-            from services.metadata_generator import generate_all_metadata
+            enriched_shorts = None
+            if not sm.has_checkpoint(task_id, 'metadata_generated'):
+                from services.metadata_generator import generate_all_metadata
 
-            def metadata_progress(current, total, msg):
-                if total > 0:
-                    step_pct = 90 + int((current / total) * 10)  # 90-100%
-                else:
-                    step_pct = 90
-                tasks[task_id]['percentage'] = step_pct
-                tasks[task_id]['step_message'] = msg
-                tasks[task_id]['step'] = 'generating_metadata'
+                sm.update_task(task_id, status='generating_metadata', step='generating_metadata')
+                tasks[task_id] = sm.get_task(task_id)
 
-            enriched_shorts = generate_all_metadata(
-                shorts, task_stories_dir,
-                progress_callback=metadata_progress
-            )
+                def metadata_progress(current, total, msg):
+                    if total > 0:
+                        step_pct = 90 + int((current / total) * 10)  # 90-100%
+                    else:
+                        step_pct = 90
+                    sm.update_task(task_id, percentage=step_pct, step_message=msg, step='generating_metadata')
+                    tasks[task_id] = sm.get_task(task_id)
+
+                logger.info(f"Task {task_id}: Starting metadata generation...")
+                enriched_shorts = generate_all_metadata(
+                    shorts, task_stories_dir,
+                    progress_callback=metadata_progress
+                )
+
+                sm.add_checkpoint(task_id, 'metadata_generated', {
+                    'enriched_shorts_count': len(enriched_shorts)
+                })
+                logger.info(f"Task {task_id}: Metadata generation complete")
+            else:
+                # Resume: Load existing enriched shorts
+                logger.info(f"Task {task_id}: Resuming - metadata already generated")
+                metadata_path = os.path.join(task_stories_dir, 'enriched_shorts.json')
+                if os.path.exists(metadata_path):
+                    with open(metadata_path, 'r') as f:
+                        enriched_shorts = json.load(f)
 
             # ---- Complete ----
-            tasks[task_id]['status'] = 'completed'
-            tasks[task_id]['percentage'] = 100
-            tasks[task_id]['step_message'] = 'AI pipeline complete!'
-            tasks[task_id]['step'] = 'done'
-            tasks[task_id]['result'] = {
+            result = {
                 'story': analysis['story'],
                 'moments': analysis['moments'],
                 'shorts': enriched_shorts,
@@ -446,6 +607,9 @@ def ai_pipeline_task(task_id, input_filename, fps):
                 'moment_count': len(analysis['moments']),
                 'short_count': sum(1 for s in enriched_shorts if s.get('output_path'))
             }
+            
+            sm.mark_completed(task_id, result)
+            tasks[task_id] = sm.get_task(task_id)
 
             logger.info(f"AI pipeline complete for task {task_id}: "
                         f"{manifest['frame_count']} frames, "
@@ -454,13 +618,14 @@ def ai_pipeline_task(task_id, input_filename, fps):
 
         except Exception as e:
             logger.error(f"AI pipeline error for task {task_id}: {e}", exc_info=True)
-            tasks[task_id]['status'] = 'error'
-            tasks[task_id]['error'] = str(e)
+            sm = get_state_manager()
+            sm.mark_error(task_id, str(e))
+            tasks[task_id] = sm.get_task(task_id)
 
 
 @app.route('/ai/start', methods=['POST'])
 def start_ai_pipeline():
-    """Start the full AI analysis pipeline."""
+    """Start the full AI analysis pipeline with persistent state."""
     data = request.json
     filename = data.get('filename')
     fps = data.get('fps', 2)
@@ -480,15 +645,19 @@ def start_ai_pipeline():
         return jsonify({'error': 'Video file not found'}), 404
 
     task_id = uuid.uuid4().hex
-    tasks[task_id] = {
-        'status': 'queued',
-        'percentage': 0,
-        'step': 'initializing',
-        'step_message': 'Starting AI pipeline...',
-        'type': 'ai_pipeline',
-        'fps': fps,
-        'filename': filename
-    }
+    
+    # Create task in state manager
+    sm = get_state_manager()
+    sm.create_task(
+        task_id,
+        task_type='ai_pipeline',
+        fps=fps,
+        filename=filename,
+        step_message='Starting AI pipeline...'
+    )
+    
+    # Sync to legacy tasks dict
+    tasks[task_id] = sm.get_task(task_id)
 
     thread = threading.Thread(
         target=ai_pipeline_task,
@@ -500,12 +669,140 @@ def start_ai_pipeline():
     return jsonify({'task_id': task_id, 'status': 'success', 'fps': fps})
 
 
-@app.route('/ai/status/<task_id>')
-def ai_task_status(task_id):
-    """Get status of an AI pipeline task."""
-    task = tasks.get(task_id)
+@app.route('/ai/tasks', methods=['GET'])
+def list_all_tasks():
+    """List all tasks (active, completed, interrupted, etc.)."""
+    sm = get_state_manager()
+    all_tasks = sm.get_all_tasks()
+    
+    # Format for response
+    tasks_list = []
+    for task_id, task in all_tasks.items():
+        tasks_list.append({
+            'task_id': task_id,
+            'status': task.get('status'),
+            'type': task.get('type'),
+            'filename': task.get('filename'),
+            'percentage': task.get('percentage', 0),
+            'step': task.get('step', ''),
+            'created_at': task.get('created_at'),
+            'updated_at': task.get('updated_at'),
+            'resumable': task.get('resumable', False),
+            'last_checkpoint': task.get('last_checkpoint')
+        })
+    
+    # Sort by updated_at (newest first)
+    tasks_list.sort(key=lambda x: x.get('updated_at', ''), reverse=True)
+    
+    return jsonify({'tasks': tasks_list, 'total': len(tasks_list)})
+
+
+@app.route('/ai/tasks/resumable', methods=['GET'])
+def list_resumable_tasks():
+    """List all tasks that can be resumed."""
+    sm = get_state_manager()
+    resumable = sm.get_resumable_tasks()
+    
+    # Format for response
+    tasks_list = []
+    for task in resumable:
+        tasks_list.append({
+            'task_id': task.get('task_id'),
+            'status': task.get('status'),
+            'type': task.get('type'),
+            'filename': task.get('filename'),
+            'percentage': task.get('percentage', 0),
+            'step': task.get('step', ''),
+            'last_checkpoint': task.get('last_checkpoint'),
+            'interrupted_at': task.get('interrupted_at'),
+            'created_at': task.get('created_at')
+        })
+    
+    return jsonify({'tasks': tasks_list, 'total': len(tasks_list)})
+
+
+@app.route('/ai/task-for-file', methods=['GET'])
+def task_for_file():
+    """Return the most recent task for a given filename (used by frontend state restore)."""
+    filename = request.args.get('filename')
+    if not filename:
+        return jsonify({'error': 'filename required'}), 400
+
+    sm = get_state_manager()
+    matching = [t for t in sm.get_all_tasks().values() if t.get('filename') == filename]
+    if not matching:
+        return jsonify({'task': None})
+
+    matching.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+    task = matching[0]
+    return jsonify({
+        'task': {
+            'task_id': task.get('task_id'),
+            'status': task.get('status'),
+            'percentage': task.get('percentage', 0),
+            'step': task.get('step', ''),
+            'last_checkpoint': task.get('last_checkpoint'),
+            'resumable': task.get('resumable', False)
+        }
+    })
+
+
+@app.route('/ai/resume/<task_id>', methods=['POST'])
+def resume_task(task_id):
+    """Resume an interrupted task from its last checkpoint."""
+    sm = get_state_manager()
+    task = sm.get_task(task_id)
+    
     if not task:
         return jsonify({'error': 'Task not found'}), 404
+    
+    if task.get('status') not in ['interrupted', 'error']:
+        return jsonify({'error': 'Task is not resumable', 'status': task.get('status')}), 400
+    
+    # Get task details
+    filename = task.get('filename')
+    fps = task.get('fps', 2)
+    
+    if not filename:
+        return jsonify({'error': 'Task missing filename metadata'}), 400
+    
+    # Reset status to queued for resumption
+    sm.update_task(task_id, 
+                   status='queued',
+                   step='resuming',
+                   step_message=f'Resuming from {task.get("last_checkpoint", "last checkpoint")}...',
+                   resumable=False)
+    
+    # Sync to legacy dict
+    tasks[task_id] = sm.get_task(task_id)
+    
+    # Start the pipeline thread (it will detect checkpoints and resume)
+    thread = threading.Thread(
+        target=ai_pipeline_task,
+        args=(task_id, filename, fps),
+        daemon=True
+    )
+    thread.start()
+    
+    return jsonify({
+        'task_id': task_id,
+        'status': 'success',
+        'message': 'Task resumed',
+        'last_checkpoint': task.get('last_checkpoint')
+    })
+
+
+@app.route('/ai/status/<task_id>')
+def ai_task_status(task_id):
+    """Get status of an AI pipeline task from persistent state."""
+    sm = get_state_manager()
+    task = sm.get_task(task_id)
+    
+    if not task:
+        # Fallback to legacy tasks dict
+        task = tasks.get(task_id)
+        if not task:
+            return jsonify({'error': 'Task not found'}), 404
 
     # Build response (exclude large data from status polling)
     response = {
@@ -514,7 +811,9 @@ def ai_task_status(task_id):
         'step': task.get('step', ''),
         'step_message': task.get('step_message', ''),
         'frame_count': task.get('frame_count'),
-        'moment_count': task.get('moment_count')
+        'moment_count': task.get('moment_count'),
+        'resumable': task.get('resumable', False),
+        'last_checkpoint': task.get('last_checkpoint')
     }
 
     if task.get('status') == 'completed' and 'result' in task:
@@ -529,16 +828,25 @@ def ai_task_status(task_id):
 
     if task.get('status') == 'error':
         response['error'] = task.get('error', 'Unknown error')
+    
+    if task.get('status') == 'interrupted':
+        response['message'] = 'Task was interrupted. You can resume it.'
 
     return jsonify(response)
 
 
+# Update the existing route to also use state manager
 @app.route('/ai/results/<task_id>')
 def ai_results(task_id):
     """Get full results of a completed AI pipeline task."""
-    task = tasks.get(task_id)
+    sm = get_state_manager()
+    task = sm.get_task(task_id)
+    
     if not task:
-        return jsonify({'error': 'Task not found'}), 404
+        # Fallback to legacy
+        task = tasks.get(task_id)
+        if not task:
+            return jsonify({'error': 'Task not found'}), 404
 
     if task.get('status') != 'completed':
         return jsonify({'error': 'Task not yet completed', 'status': task.get('status')}), 400

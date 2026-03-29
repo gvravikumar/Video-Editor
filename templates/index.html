@@ -36,6 +36,18 @@
     <!-- Main Content -->
     <div class="container py-5">
 
+        <!-- Task Restore Banner -->
+        <div id="task-restore-banner" class="d-none mb-4">
+            <div class="alert alert-info border-0 rounded-3 d-flex align-items-center shadow-sm mb-0 py-3">
+                <i class="bi bi-arrow-clockwise me-3 fs-5 text-info"></i>
+                <span id="task-restore-text" class="flex-grow-1 small"></span>
+                <div class="d-flex gap-2 ms-3 flex-shrink-0">
+                    <button id="task-restore-btn" class="btn btn-sm btn-primary rounded-pill px-3">Resume</button>
+                    <button onclick="dismissTaskBanner()" class="btn btn-sm btn-outline-secondary rounded-pill px-3">Dismiss</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Upload Section -->
         <div class="row min-vh-50 align-items-center" id="upload-section">
             <div class="col-lg-8 mx-auto text-center">
@@ -81,15 +93,42 @@
 
                 <!-- Previously Uploaded Files -->
                 <div id="previous-files-container" class="mt-5 d-none">
-                    <div class="text-start mb-3">
-                        <h5 class="text-white fw-semibold">
-                            <i class="bi bi-clock-history text-primary me-2"></i>
-                            Previously Uploaded Videos
-                        </h5>
-                        <p class="text-muted small">Select a video to avoid re-uploading</p>
+                    <div class="text-start mb-3 d-flex justify-content-between align-items-end">
+                        <div>
+                            <h5 class="text-white fw-semibold mb-1">
+                                <i class="bi bi-clock-history text-primary me-2"></i>
+                                Previously Uploaded Videos
+                                <span id="uploads-count" class="badge bg-surface border border-dark ms-2 text-muted fs-7 fw-normal"></span>
+                            </h5>
+                            <p class="text-muted small mb-0">Select any video to resume processing or start fresh</p>
+                        </div>
+                        <button class="btn btn-sm btn-outline-secondary rounded-pill px-3" onclick="loadPreviousUploads()">
+                            <i class="bi bi-arrow-clockwise me-1"></i> Refresh
+                        </button>
                     </div>
-                    <div class="list-group" id="previous-files-list">
+
+                    <!-- Search / Filter -->
+                    <div class="mb-3 position-relative">
+                        <i class="bi bi-search position-absolute text-muted" style="left:12px; top:50%; transform:translateY(-50%); pointer-events:none;"></i>
+                        <input type="text" id="uploads-search" class="form-control form-control-sm bg-dark text-white border-secondary ps-4"
+                               placeholder="Search videos…" oninput="filterUploads(this.value)">
+                    </div>
+
+                    <!-- Scrollable list -->
+                    <div class="list-group" id="previous-files-list"
+                         style="max-height: 420px; overflow-y: auto;">
                         <!-- Files will be populated here -->
+                    </div>
+
+                    <!-- Loading skeleton shown while fetching -->
+                    <div id="uploads-loading" class="d-none text-center py-4 text-muted small">
+                        <div class="spinner-border spinner-border-sm me-2 text-primary" role="status"></div>
+                        Loading your videos…
+                    </div>
+
+                    <!-- Empty state when search returns nothing -->
+                    <div id="uploads-empty" class="d-none text-center py-4 text-muted small">
+                        <i class="bi bi-search me-1"></i> No videos match your search.
                     </div>
                 </div>
             </div>

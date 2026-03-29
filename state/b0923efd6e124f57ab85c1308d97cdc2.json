@@ -1,0 +1,17 @@
+{
+  "task_id": "b0923efd6e124f57ab85c1308d97cdc2",
+  "type": "ai_pipeline",
+  "status": "extracting_frames",
+  "percentage": 6,
+  "step": "extracting_frames",
+  "step_message": "Extracted 810/2343 frames",
+  "created_at": "2026-03-29T17:04:45.968029",
+  "updated_at": "2026-03-29T17:05:29.626215",
+  "checkpoints": [],
+  "resumable": false,
+  "fps": 1.0,
+  "filename": "2026-03-21_17-18-53.mp4",
+  "task_frames_dir": "/Users/ravikumar/CodeStudioProjects/Video-Editor/frames/b0923efd6e124f57ab85c1308d97cdc2",
+  "task_shorts_dir": "/Users/ravikumar/CodeStudioProjects/Video-Editor/shorts/b0923efd6e124f57ab85c1308d97cdc2",
+  "task_stories_dir": "/Users/ravikumar/CodeStudioProjects/Video-Editor/stories/b0923efd6e124f57ab85c1308d97cdc2"
+}

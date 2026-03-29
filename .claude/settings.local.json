@@ -7,7 +7,10 @@
       "Bash(python:*)",
       "Bash(curl -s http://localhost:8000/ -o /dev/null -w \"%{http_code}\")",
       "Bash(curl -s http://localhost:8000/uploads/list)",
-      "Bash(curl -s \"http://localhost:8000/status/c7aa115738c9456baf35a14488db2940\")"
+      "Bash(curl -s \"http://localhost:8000/status/c7aa115738c9456baf35a14488db2940\")",
+      "Bash(find /Users/ravikumar/CodeStudioProjects/Video-Editor -maxdepth 2 -type f \\\\\\(-name *.md -o -name *.db -o -name *.sqlite* -o -name database* \\\\\\))",
+      "Bash(node -e \":*)",
+      "Bash(ffprobe -version)"
     ],
     "deny": [],
     "ask": []

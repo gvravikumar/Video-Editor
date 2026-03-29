@@ -2,7 +2,39 @@
 // State
 // ============================================================
 let currentFilename = null;
+let currentTaskId = null;
 let videoDuration = 0;
+
+// ============================================================
+// localStorage helpers — persist task_id ↔ filename mapping
+// ============================================================
+
+function saveTaskToStorage(filename, taskId) {
+    try {
+        const map = JSON.parse(localStorage.getItem('vsTaskMap') || '{}');
+        map[filename] = taskId;
+        // Keep only last 30 entries
+        const keys = Object.keys(map);
+        if (keys.length > 30) keys.slice(0, keys.length - 30).forEach(k => delete map[k]);
+        localStorage.setItem('vsTaskMap', JSON.stringify(map));
+        localStorage.setItem('vsLastTaskId', taskId);
+        localStorage.setItem('vsLastFilename', filename);
+    } catch (e) {}
+}
+
+function getTaskIdForFile(filename) {
+    try {
+        const map = JSON.parse(localStorage.getItem('vsTaskMap') || '{}');
+        return map[filename] || null;
+    } catch (e) { return null; }
+}
+
+function getLastSession() {
+    return {
+        taskId: localStorage.getItem('vsLastTaskId'),
+        filename: localStorage.getItem('vsLastFilename')
+    };
+}
 
 document.addEventListener('DOMContentLoaded', () => {
     const dropZone = document.getElementById('drop-zone');
@@ -10,6 +42,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Load previously uploaded files
     loadPreviousUploads();
+
+    // Check if there's an in-progress or completed task to restore
+    checkForExistingTasks();
     
     // Drag & Drop Handlers
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
@@ -150,7 +185,7 @@ function setupEditor(videoPath, metadata) {
 
     // Formatting metadata
     const res = metadata.resolution;
-    const durStr = new Date(metadata.duration * 1000).toISOString().substr(11, 8);
+    const durStr = new Date(metadata.duration * 1000).toISOString().substring(11, 19);
     const metaHtml = `
         <span class="badge bg-dark rounded-pill shadow-sm"><i class="bi bi-clock-history me-1"></i> ${durStr}</span> 
         <span class="badge bg-dark rounded-pill shadow-sm"><i class="bi bi-aspect-ratio me-1"></i> ${res[0]}x${res[1]}</span> 
@@ -281,7 +316,7 @@ function processVideo() {
             pollTaskStatus(data.task_id);
         }
     })
-    .catch(error => {
+    .catch(() => {
         showErrorStatus("Error starting process.");
     });
 }
@@ -352,15 +387,38 @@ function pollTaskStatus(taskId) {
 // Previously Uploaded Files
 // ============================================================
 
+// All loaded files — kept in memory so the search filter can work without re-fetching
+let _allUploadedFiles = [];
+
 function loadPreviousUploads() {
+    const container = document.getElementById('previous-files-container');
+    const loadingEl = document.getElementById('uploads-loading');
+    const listEl = document.getElementById('previous-files-list');
+
+    // Show loading skeleton while fetching
+    if (container) container.classList.remove('d-none');
+    if (loadingEl) loadingEl.classList.remove('d-none');
+    if (listEl) listEl.innerHTML = '';
+
     fetch('/uploads/list')
         .then(response => response.json())
         .then(data => {
-            if (data.files && data.files.length > 0) {
-                displayPreviousFiles(data.files);
+            if (loadingEl) loadingEl.classList.add('d-none');
+            if (data.error) {
+                console.error('Error loading uploads:', data.error);
+                if (container) container.classList.add('d-none');
+                return;
+            }
+            _allUploadedFiles = data.files || [];
+            if (_allUploadedFiles.length > 0) {
+                displayPreviousFiles(_allUploadedFiles);
+            } else {
+                if (container) container.classList.add('d-none');
             }
         })
         .catch(error => {
+            if (loadingEl) loadingEl.classList.add('d-none');
+            if (container) container.classList.add('d-none');
             console.error('Error loading previous uploads:', error);
         });
 }
@@ -368,15 +426,54 @@ function loadPreviousUploads() {
 function displayPreviousFiles(files) {
     const container = document.getElementById('previous-files-container');
     const listElement = document.getElementById('previous-files-list');
+    const countEl = document.getElementById('uploads-count');
+    const emptyEl = document.getElementById('uploads-empty');
+    const searchEl = document.getElementById('uploads-search');
+
+    if (countEl) countEl.textContent = `${files.length} video${files.length !== 1 ? 's' : ''}`;
+    if (emptyEl) emptyEl.classList.add('d-none');
 
     listElement.innerHTML = '';
-
     files.forEach(file => {
-        const fileItem = createFileListItem(file);
-        listElement.appendChild(fileItem);
+        listElement.appendChild(createFileListItem(file));
     });
 
-    container.classList.remove('d-none');
+    if (container) container.classList.remove('d-none');
+
+    // Reset search box when list is refreshed
+    if (searchEl) searchEl.value = '';
+}
+
+function filterUploads(query) {
+    const listEl = document.getElementById('previous-files-list');
+    const emptyEl = document.getElementById('uploads-empty');
+    const countEl = document.getElementById('uploads-count');
+    const q = query.trim().toLowerCase();
+
+    const matched = q
+        ? _allUploadedFiles.filter(f => f.filename.toLowerCase().includes(q))
+        : _allUploadedFiles;
+
+    listEl.innerHTML = '';
+    matched.forEach(file => listEl.appendChild(createFileListItem(file)));
+
+    if (countEl) countEl.textContent = `${matched.length} / ${_allUploadedFiles.length} video${_allUploadedFiles.length !== 1 ? 's' : ''}`;
+    if (emptyEl) emptyEl.classList.toggle('d-none', matched.length > 0);
+}
+
+function taskStatusBadge(status) {
+    const map = {
+        completed: '<span class="badge bg-success">Done</span>',
+        interrupted: '<span class="badge bg-warning text-dark">Interrupted</span>',
+        error: '<span class="badge bg-danger">Error</span>',
+        extracting_frames: '<span class="badge bg-primary">Extracting</span>',
+        analyzing_frames: '<span class="badge bg-primary">Analyzing</span>',
+        generating_story: '<span class="badge bg-primary">Story</span>',
+        generating_shorts: '<span class="badge bg-primary">Shorts</span>',
+        generating_metadata: '<span class="badge bg-primary">Metadata</span>',
+        queued: '<span class="badge bg-secondary">Queued</span>'
+    };
+    return map[status] || '<span class="badge bg-primary">Click to use</span>';
 }
 
 function createFileListItem(file) {
@@ -388,18 +485,19 @@ function createFileListItem(file) {
         selectPreviousFile(file);
     };
 
-    // Format duration
     let durationStr = 'Unknown';
     let resolutionStr = 'Unknown';
     if (file.metadata) {
         const dur = file.metadata.duration;
-        durationStr = new Date(dur * 1000).toISOString().substr(11, 8);
+        durationStr = new Date(dur * 1000).toISOString().substring(11, 19);
         resolutionStr = `${file.metadata.resolution[0]}x${file.metadata.resolution[1]}`;
     }
 
-    // Format modified date
     const modDate = new Date(file.modified * 1000);
     const dateStr = modDate.toLocaleDateString() + ' ' + modDate.toLocaleTimeString();
+    const statusBadge = file.task_status
+        ? taskStatusBadge(file.task_status)
+        : '<span class="badge bg-primary">Click to use</span>';
 
     item.innerHTML = `
         <div class="d-flex justify-content-between align-items-start">
@@ -416,9 +514,7 @@ function createFileListItem(file) {
             </div>
             <div class="text-end text-muted small">
                 <div><i class="bi bi-calendar3 me-1"></i> ${dateStr}</div>
-                <div class="mt-1">
-                    <span class="badge bg-primary">Click to use</span>
-                </div>
+                <div class="mt-1">${statusBadge}</div>
             </div>
         </div>
     `;
@@ -426,11 +522,9 @@ function createFileListItem(file) {
     return item;
 }
 
-function selectPreviousFile(file) {
-    // Set current filename
+async function selectPreviousFile(file) {
     currentFilename = file.filename;
 
-    // Create metadata object
     const metadata = {
         duration: file.metadata ? file.metadata.duration : 0,
         resolution: file.metadata ? file.metadata.resolution : [0, 0],
@@ -438,7 +532,44 @@ function selectPreviousFile(file) {
         format: file.filename.split('.').pop().toUpperCase()
     };
 
-    // Setup editor with the selected file
+    // Check if this file already has a task (from backend task_status or localStorage)
+    const taskId = file.task_id || getTaskIdForFile(file.filename);
+
+    if (taskId) {
+        try {
+            const resp = await fetch('/ai/status/' + taskId);
+            const data = await resp.json();
+            if (!data.error) {
+                if (data.status === 'completed') {
+                    setupEditor(file.url, metadata);
+                    if (confirm('AI processing results are available for this video.\nView results? (Cancel to start fresh)')) {
+                        const results = await fetch('/ai/results/' + taskId).then(r => r.json());
+                        showAIResultsFromAPI(results);
+                        return;
+                    }
+                } else if (data.status === 'interrupted' || data.resumable) {
+                    setupEditor(file.url, metadata);
+                    if (confirm(`AI processing was interrupted at ${data.percentage || 0}%.\nResume from last checkpoint? (Cancel to start fresh)`)) {
+                        resumeTask(taskId);
+                        return;
+                    }
+                } else if (['queued', 'extracting_frames', 'analyzing_frames',
+                             'generating_story', 'generating_shorts', 'generating_metadata'].includes(data.status)) {
+                    setupEditor(file.url, metadata);
+                    if (confirm(`AI processing is in progress (${data.percentage || 0}%).\nReconnect to live progress?`)) {
+                        currentTaskId = taskId;
+                        document.getElementById('video-column').classList.add('d-none');
+                        document.getElementById('controls-column').classList.add('d-none');
+                        document.getElementById('ai-progress-container').classList.remove('d-none');
+                        resetAIProgress();
+                        pollAIProgress(taskId);
+                        return;
+                    }
+                }
+            }
+        } catch (e) { /* ignore, fall through to normal editor */ }
+    }
+
     setupEditor(file.url, metadata);
 }
 
@@ -468,8 +599,8 @@ function generateAIShorts() {
     // Reset AI progress
     resetAIProgress();
 
-    // Start AI pipeline
-    fetch('/generate_ai_shorts', {
+    // Start AI pipeline via persistent /ai/start endpoint
+    fetch('/ai/start', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
@@ -489,7 +620,8 @@ function generateAIShorts() {
             document.getElementById('controls-column').classList.remove('d-none');
             document.getElementById('ai-progress-container').classList.add('d-none');
         } else {
-            // Start polling for progress
+            currentTaskId = data.task_id;
+            saveTaskToStorage(currentFilename, data.task_id);
             pollAIProgress(data.task_id);
         }
     })
@@ -510,45 +642,54 @@ function resetAIProgress() {
 
 function pollAIProgress(taskId) {
     const interval = setInterval(() => {
-        fetch('/status/' + taskId)
+        fetch('/ai/status/' + taskId)
         .then(response => response.json())
         .then(data => {
             if (data.error) {
                 clearInterval(interval);
+                resetAIGenerateBtn();
                 alert('Error: ' + data.error);
-                document.getElementById('ai-generate-btn').disabled = false;
-                document.getElementById('ai-generate-btn').innerHTML = '<i class="bi bi-stars me-2"></i> Generate AI Shorts';
-                document.getElementById('video-column').classList.remove('d-none');
-                document.getElementById('controls-column').classList.remove('d-none');
-                document.getElementById('ai-progress-container').classList.add('d-none');
                 return;
             }
 
-            // Update progress based on current step
             const step = data.step || data.status;
             const percentage = data.percentage || 0;
             const message = data.step_message || data.status;
 
             updateAIStep(step, percentage, message);
 
-            // Check if completed
             if (data.status === 'completed') {
                 clearInterval(interval);
-                showAIResults(data);
+                // Fetch full results (status endpoint only has summary counts)
+                fetch('/ai/results/' + taskId)
+                    .then(r => r.json())
+                    .then(results => showAIResultsFromAPI(results))
+                    .catch(() => {
+                        alert('Pipeline finished but could not load results. Refresh and select the video again.');
+                        resetAIGenerateBtn();
+                    });
+            } else if (data.status === 'interrupted') {
+                clearInterval(interval);
+                showResumePrompt(taskId, 'Processing was interrupted by a server restart.');
             } else if (data.status === 'error') {
                 clearInterval(interval);
+                resetAIGenerateBtn();
                 alert('AI processing failed: ' + (data.error || 'Unknown error'));
-                document.getElementById('ai-generate-btn').disabled = false;
-                document.getElementById('ai-generate-btn').innerHTML = '<i class="bi bi-stars me-2"></i> Generate AI Shorts';
-                document.getElementById('video-column').classList.remove('d-none');
-                document.getElementById('controls-column').classList.remove('d-none');
-                document.getElementById('ai-progress-container').classList.add('d-none');
             }
         })
-        .catch(error => {
-            console.error('Error polling status:', error);
+        .catch(() => {
+            // Network error / server restart — keep polling; server will mark task interrupted
         });
-    }, 2000); // Poll every 2 seconds
+    }, 2000);
+}
+
+function resetAIGenerateBtn() {
+    const btn = document.getElementById('ai-generate-btn');
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-stars me-2"></i> Generate AI Shorts';
+    document.getElementById('video-column').classList.remove('d-none');
+    document.getElementById('controls-column').classList.remove('d-none');
+    document.getElementById('ai-progress-container').classList.add('d-none');
 }
 
 function updateAIStep(step, percentage, message) {
@@ -618,37 +759,51 @@ function highlightPipelineStep(step) {
     }
 }
 
-function showAIResults(data) {
+function showAIResultsFromAPI(apiData) {
     // Swap spinner → success icon
     const spinner = document.getElementById('ai-spinner');
     const successIcon = document.getElementById('ai-success-icon');
     if (spinner) spinner.classList.add('d-none');
     if (successIcon) successIcon.classList.remove('d-none');
 
-    // Brief pause so the user sees 100% / success, then switch to results
+    // Brief pause so the user sees 100% / success state, then reveal results
     setTimeout(() => {
         document.getElementById('ai-progress-container').classList.add('d-none');
+        document.getElementById('editor-section').classList.remove('d-none');
         document.getElementById('results-section').classList.remove('d-none');
 
-        const result = data.result || {};
+        // /ai/results/ returns a flat structure — convert to the nested shape
+        // that displayShorts / createShortCard / showShortDetails expect
+        const shorts = (apiData.shorts || []).map(s => ({
+            web_video_path: s.video_url,
+            web_thumbnail_path: s.thumbnail_url,
+            duration: s.duration,
+            moment: {
+                category: s.category,
+                virality_score: s.virality_score,
+                description: s.moment_description,
+                start_time: s.start_time,
+                end_time: s.end_time
+            },
+            metadata: {
+                title: s.title,
+                description: s.description,
+                tags: s.tags
+            }
+        }));
 
-        // Display shorts
-        const shorts = result.shorts || [];
         if (shorts.length > 0) {
             displayShorts(shorts);
         }
 
-        // Display story
-        const story = result.story || {};
-        if (story.full_story) {
-            loadStory(story.full_story);
+        if (apiData.story) {
+            loadStory(apiData.story);
         }
 
-        // Update stats
         updateStats({
-            frames: data.frame_count || result.frame_count || 0,
-            moments: data.moment_count || result.moment_count || 0,
-            shorts: result.short_count || shorts.length
+            frames: apiData.frame_count || 0,
+            moments: apiData.moment_count || 0,
+            shorts: apiData.short_count || shorts.length
         });
     }, 800);
 }
@@ -792,6 +947,129 @@ function copyToClipboard(elementId) {
     const el = document.getElementById(elementId);
     if (!el) return;
     navigator.clipboard.writeText(el.textContent.trim()).catch(() => {});
+}
+
+// ============================================================
+// State Restoration — check for interrupted/active tasks on load
+// ============================================================
+
+async function checkForExistingTasks() {
+    const { taskId, filename } = getLastSession();
+    if (!taskId || !filename) return;
+
+    try {
+        const response = await fetch('/ai/status/' + taskId);
+        if (!response.ok) return;
+        const data = await response.json();
+        if (data.error) return;
+
+        const status = data.status;
+
+        if (status === 'completed') {
+            showTaskBanner(filename, taskId, 'completed',
+                `Previous AI processing for <strong>${filename}</strong> is complete. View results?`);
+        } else if (status === 'interrupted' || data.resumable) {
+            showTaskBanner(filename, taskId, 'interrupted',
+                `AI processing for <strong>${filename}</strong> was interrupted at ${data.percentage || 0}%. Resume?`);
+        } else if (['queued', 'extracting_frames', 'analyzing_frames',
+                     'generating_story', 'generating_shorts', 'generating_metadata'].includes(status)) {
+            // Still running (e.g. tab was closed and reopened) — reattach
+            showTaskBanner(filename, taskId, 'running',
+                `AI processing for <strong>${filename}</strong> is in progress (${data.percentage || 0}%). Reconnect?`);
+        }
+    } catch (e) { /* server not available yet */ }
+}
+
+function showTaskBanner(filename, taskId, type, message) {
+    const banner = document.getElementById('task-restore-banner');
+    const text = document.getElementById('task-restore-text');
+    const btn = document.getElementById('task-restore-btn');
+    if (!banner || !text || !btn) return;
+
+    text.innerHTML = message;
+
+    if (type === 'completed') {
+        btn.textContent = 'View Results';
+        btn.className = 'btn btn-sm btn-success';
+        btn.onclick = async () => {
+            dismissTaskBanner();
+            const results = await fetch('/ai/results/' + taskId).then(r => r.json());
+            // Need the file selected first so editor-section is visible
+            await restoreFileSelection(filename);
+            showAIResultsFromAPI(results);
+        };
+    } else if (type === 'interrupted') {
+        btn.textContent = 'Resume';
+        btn.className = 'btn btn-sm btn-warning';
+        btn.onclick = async () => {
+            dismissTaskBanner();
+            await restoreFileSelection(filename);
+            resumeTask(taskId);
+        };
+    } else if (type === 'running') {
+        btn.textContent = 'Reconnect';
+        btn.className = 'btn btn-sm btn-primary';
+        btn.onclick = async () => {
+            dismissTaskBanner();
+            await restoreFileSelection(filename);
+            document.getElementById('video-column').classList.add('d-none');
+            document.getElementById('controls-column').classList.add('d-none');
+            document.getElementById('ai-progress-container').classList.remove('d-none');
+            resetAIProgress();
+            pollAIProgress(taskId);
+        };
+    }
+
+    banner.classList.remove('d-none');
+}
+
+function dismissTaskBanner() {
+    const banner = document.getElementById('task-restore-banner');
+    if (banner) banner.classList.add('d-none');
+}
+
+async function restoreFileSelection(filename) {
+    if (currentFilename === filename) return; // Already selected
+    try {
+        // Fetch the uploads list to get the file's URL and metadata
+        const data = await fetch('/uploads/list').then(r => r.json());
+        const file = (data.files || []).find(f => f.filename === filename);
+        if (file) {
+            currentFilename = file.filename;
+            const metadata = file.metadata
+                ? { ...file.metadata, format: filename.split('.').pop().toUpperCase() }
+                : { duration: 0, resolution: [0, 0], fps: 0, format: 'MP4' };
+            setupEditor(file.url, metadata);
+        }
+    } catch (e) {}
+}
+
+async function resumeTask(taskId) {
+    try {
+        const response = await fetch('/ai/resume/' + taskId, { method: 'POST' });
+        const data = await response.json();
+        if (data.error) {
+            alert('Could not resume: ' + data.error);
+            return;
+        }
+        currentTaskId = taskId;
+        document.getElementById('video-column').classList.add('d-none');
+        document.getElementById('controls-column').classList.add('d-none');
+        document.getElementById('ai-progress-container').classList.remove('d-none');
+        resetAIProgress();
+        pollAIProgress(taskId);
+    } catch (e) {
+        alert('Failed to resume task.');
+    }
+}
+
+function showResumePrompt(taskId, reason) {
+    const msg = reason + '\n\nResume from last checkpoint?';
+    if (confirm(msg)) {
+        resumeTask(taskId);
+    } else {
+        resetAIGenerateBtn();
+    }
 }
 
 function updateFpsEstimates(fpsValue) {
