@@ -44,6 +44,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.getElementById('process-btn').addEventListener('click', processVideo);
+    document.getElementById('ai-generate-btn').addEventListener('click', generateAIShorts);
     document.getElementById('restart-btn').addEventListener('click', () => {
         window.location.reload();
     });
@@ -57,6 +58,25 @@ document.addEventListener('DOMContentLoaded', () => {
             player.playbackRate = 1.0;
         }
     });
+
+    // Update FPS display when slider changes
+    const fpsSlider = document.getElementById('ai-fps-slider');
+    const fpsDisplay = document.getElementById('ai-fps-display');
+    if (fpsSlider && fpsDisplay) {
+        fpsSlider.addEventListener('input', function() {
+            const fpsValue = parseFloat(this.value);
+            fpsDisplay.textContent = fpsValue + ' FPS';
+
+            // Show frame count estimate if video is loaded
+            if (videoDuration > 0) {
+                const estimatedFrames = Math.round(videoDuration * fpsValue);
+                const helpText = document.getElementById('ai-fps-help');
+                if (helpText) {
+                    helpText.textContent = `~${estimatedFrames.toLocaleString()} frames for this video`;
+                }
+            }
+        });
+    }
 });
 
 function handleFiles(file) {
@@ -409,4 +429,216 @@ function selectPreviousFile(file) {
 
     // Setup editor with the selected file
     setupEditor(file.url, metadata);
+}
+
+// ============================================================
+// AI Shorts Generator
+// ============================================================
+
+function generateAIShorts() {
+    if (!currentFilename) {
+        alert('No video file loaded!');
+        return;
+    }
+
+    // Get FPS value from slider
+    const fps = parseInt(document.getElementById('ai-fps-slider').value) || 2;
+
+    // Disable button
+    const btn = document.getElementById('ai-generate-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> Starting AI Pipeline...';
+
+    // Hide editor, show AI progress
+    document.getElementById('editor-section').classList.add('d-none');
+    document.getElementById('ai-progress-section').classList.remove('d-none');
+
+    // Reset AI progress
+    resetAIProgress();
+
+    // Start AI pipeline
+    fetch('/generate_ai_shorts', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            filename: currentFilename,
+            fps: fps
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            alert('Error: ' + data.error);
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-stars me-2"></i> Generate AI Shorts';
+            document.getElementById('editor-section').classList.remove('d-none');
+            document.getElementById('ai-progress-section').classList.add('d-none');
+        } else {
+            // Start polling for progress
+            pollAIProgress(data.task_id);
+        }
+    })
+    .catch(error => {
+        alert('Error starting AI pipeline: ' + error);
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-stars me-2"></i> Generate AI Shorts';
+        document.getElementById('editor-section').classList.remove('d-none');
+        document.getElementById('ai-progress-section').classList.add('d-none');
+    });
+}
+
+function resetAIProgress() {
+    // Reset all progress indicators
+    updateAIStep('extracting_frames', 0, 'Initializing...');
+}
+
+function pollAIProgress(taskId) {
+    const interval = setInterval(() => {
+        fetch('/status/' + taskId)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                clearInterval(interval);
+                alert('Error: ' + data.error);
+                document.getElementById('ai-generate-btn').disabled = false;
+                document.getElementById('ai-generate-btn').innerHTML = '<i class="bi bi-stars me-2"></i> Generate AI Shorts';
+                return;
+            }
+
+            // Update progress based on current step
+            const step = data.step || data.status;
+            const percentage = data.percentage || 0;
+            const message = data.step_message || data.status;
+
+            updateAIStep(step, percentage, message);
+
+            // Check if completed
+            if (data.status === 'completed') {
+                clearInterval(interval);
+                showAIResults(data);
+            } else if (data.status === 'error') {
+                clearInterval(interval);
+                alert('AI processing failed: ' + (data.error || 'Unknown error'));
+                document.getElementById('ai-generate-btn').disabled = false;
+                document.getElementById('ai-generate-btn').innerHTML = '<i class="bi bi-stars me-2"></i> Generate AI Shorts';
+            }
+        })
+        .catch(error => {
+            console.error('Error polling status:', error);
+        });
+    }, 2000); // Poll every 2 seconds
+}
+
+function updateAIStep(step, percentage, message) {
+    // Update step indicators based on current step
+    const steps = ['extracting_frames', 'analyzing_frames', 'generating_story', 'detecting_moments', 'generating_shorts', 'generating_metadata'];
+
+    // Update progress bar
+    document.getElementById('ai-overall-progress').style.width = percentage + '%';
+    document.getElementById('ai-overall-percentage').innerText = percentage + '%';
+
+    // Update status message
+    const statusText = document.getElementById('ai-status-text');
+    if (statusText) {
+        statusText.innerText = message || 'Processing...';
+    }
+
+    // Update step-specific UI elements (if you have them in HTML)
+    // This is a placeholder - you can enhance based on your HTML structure
+}
+
+function showAIResults(data) {
+    // Hide progress section
+    document.getElementById('ai-progress-section').classList.add('d-none');
+
+    // Show results section
+    document.getElementById('ai-results-section').classList.remove('d-none');
+
+    // Load and display shorts
+    if (data.shorts && data.shorts.length > 0) {
+        displayShorts(data.shorts);
+    }
+
+    // Show story if available
+    if (data.story_path) {
+        loadStory(data.story_path);
+    }
+
+    // Update stats
+    if (data.stats) {
+        updateStats(data.stats);
+    }
+}
+
+function displayShorts(shorts) {
+    const grid = document.getElementById('shorts-grid');
+    if (!grid) return;
+
+    grid.innerHTML = '';
+
+    shorts.forEach((short, index) => {
+        const card = createShortCard(short, index);
+        grid.appendChild(card);
+    });
+}
+
+function createShortCard(short, index) {
+    const card = document.createElement('div');
+    card.className = 'short-card';
+
+    const moment = short.moment || {};
+    const metadata = short.metadata || {};
+
+    card.innerHTML = `
+        <div class="short-card-inner">
+            <div class="short-thumbnail" style="background-image: url('${short.web_thumbnail_path || ''}')">
+                <video class="short-preview" loop muted>
+                    <source src="${short.web_video_path}" type="video/mp4">
+                </video>
+                <div class="virality-badge">${moment.virality_score || 5}/10</div>
+            </div>
+            <div class="short-info">
+                <span class="category-badge badge-${(moment.category || 'intense').toLowerCase()}">${moment.category || 'INTENSE'}</span>
+                <span class="duration-badge">${short.duration || 0}s</span>
+                <h6 class="short-title">${metadata.title || 'Untitled'}</h6>
+            </div>
+        </div>
+    `;
+
+    // Add hover preview
+    const videoEl = card.querySelector('.short-preview');
+    card.addEventListener('mouseenter', () => {
+        if (videoEl) videoEl.play();
+    });
+    card.addEventListener('mouseleave', () => {
+        if (videoEl) {
+            videoEl.pause();
+            videoEl.currentTime = 0;
+        }
+    });
+
+    // Add click handler to show details
+    card.addEventListener('click', () => showShortDetails(short, index));
+
+    return card;
+}
+
+function showShortDetails(short, index) {
+    // Show modal with short details
+    // This is a placeholder - implement based on your modal structure
+    console.log('Show short details:', short);
+}
+
+function loadStory(storyPath) {
+    // Load and display story
+    // Placeholder implementation
+    console.log('Load story from:', storyPath);
+}
+
+function updateStats(stats) {
+    // Update statistics display
+    // Placeholder implementation
+    console.log('Update stats:', stats);
 }

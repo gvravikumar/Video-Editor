@@ -272,6 +272,39 @@ def process_video():
 # ROUTES - AI Pipeline
 # ============================================================
 
+@app.route('/generate_ai_shorts', methods=['POST'])
+def generate_ai_shorts():
+    """Start AI shorts generation pipeline."""
+    data = request.json
+    filename = data.get('filename')
+    fps = data.get('fps', 2)
+
+    if not filename:
+        return jsonify({'error': 'Filename is required'}), 400
+
+    # Validate FPS
+    try:
+        fps = int(fps)
+        if fps < 1 or fps > 5:
+            fps = 2
+    except:
+        fps = 2
+
+    task_id = uuid.uuid4().hex
+    tasks[task_id] = {
+        'status': 'queued',
+        'percentage': 0,
+        'step': 'initializing',
+        'step_message': 'Initializing AI pipeline...'
+    }
+
+    # Start AI pipeline in background thread
+    thread = threading.Thread(target=ai_pipeline_task, args=(task_id, filename, fps))
+    thread.start()
+
+    return jsonify({'task_id': task_id, 'status': 'success'})
+
+
 def ai_pipeline_task(task_id, input_filename, fps):
     """
     Full AI pipeline:
