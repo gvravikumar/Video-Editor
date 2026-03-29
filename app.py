@@ -1119,6 +1119,13 @@ def ai_models():
     return jsonify({'models': result})
 
 
+@app.route('/ai/models/download-status', methods=['GET'])
+def model_download_status():
+    """Return live download progress for all models being downloaded at startup."""
+    from services.model_downloader import get_all_status
+    return jsonify({'status': get_all_status()})
+
+
 # ============================================================
 # ROUTES - System Info
 # ============================================================
@@ -1154,4 +1161,11 @@ def system_info():
 # ============================================================
 
 if __name__ == '__main__':
+    # Start background model downloads before serving requests.
+    # The WERKZEUG_RUN_MAIN check prevents double-execution when Flask's
+    # debug-mode reloader spawns a second process.
+    if not app.debug or os.environ.get('WERKZEUG_RUN_MAIN'):
+        from services.model_downloader import start_startup_downloads
+        start_startup_downloads(app.config['MODELS_FOLDER'])
+
     app.run(debug=True, port=8000)

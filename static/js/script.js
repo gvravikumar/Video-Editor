@@ -120,40 +120,30 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // Check which vision models are already downloaded and annotate cards
+    // Check which models are downloaded and start polling for any active downloads
     fetch('/ai/models')
         .then(r => r.json())
         .then(data => {
             data.models.forEach(m => {
                 const card = document.querySelector(`.model-option[data-model="${m.key}"]`);
                 if (!card) return;
-                const sub = card.querySelector('div > div:last-child');
-                if (!m.downloaded) {
-                    // Add "will download" note if not already present
-                    if (sub && !sub.dataset.downloadNoted) {
+                if (m.downloaded) {
+                    // Mark badge as Downloaded if it isn't already
+                    const badge = card.querySelector('.model-dl-badge');
+                    if (badge) { badge.textContent = 'Downloaded'; badge.className = 'badge bg-success model-dl-badge'; badge.style.fontSize = '0.6rem'; }
+                } else {
+                    const sub = card.querySelector('.model-dl-sub');
+                    if (sub && !sub.dataset.noted) {
                         sub.textContent += ' · will download on first use';
-                        sub.dataset.downloadNoted = '1';
-                    }
-                    // Disable BLIP-2 selection warning (still allow, just inform)
-                    const radio = card.querySelector('input[type="radio"]');
-                    if (radio) {
-                        radio.addEventListener('change', function() {
-                            if (this.checked) {
-                                const note = card.querySelector('.download-note');
-                                if (!note) {
-                                    const warn = document.createElement('div');
-                                    warn.className = 'download-note text-warning mt-1';
-                                    warn.style.fontSize = '0.65rem';
-                                    warn.textContent = `⚠ ${m.display_name} (${m.size_label}) will be downloaded automatically when the pipeline starts.`;
-                                    card.appendChild(warn);
-                                }
-                            }
-                        });
+                        sub.dataset.noted = '1';
                     }
                 }
             });
         })
-        .catch(() => {}); // non-critical — UI still works without it
+        .catch(() => {});
+
+    // Poll /ai/models/download-status while any download is queued or in-progress
+    pollModelDownloads();
 
     // Fetch system info and show device badge
     fetch('/system/info')
@@ -647,15 +637,17 @@ function generateAIShorts() {
     // Get selected vision model
     const visionModel = document.querySelector('input[name="vision-model"]:checked')?.value || 'blip-base';
 
-    // If the selected model is not yet downloaded, confirm before proceeding
+    // Warn if selected model still needs to be downloaded (BLIP-2 / any model not yet on disk)
     const selectedCard = document.querySelector(`.model-option[data-model="${visionModel}"]`);
-    const isNotDownloaded = selectedCard && selectedCard.querySelector('.download-note');
+    const badge = selectedCard && selectedCard.querySelector('.model-dl-badge');
+    const isNotDownloaded = badge && badge.textContent !== 'Downloaded';
     if (isNotDownloaded) {
-        const modelInfo = { 'blip-large': '~1.5 GB', 'blip2': '~5.5 GB' };
-        const size = modelInfo[visionModel] || '';
+        const sub = selectedCard.querySelector('.model-dl-sub');
+        const sizeHint = sub ? sub.textContent.split('·')[0].trim() : '';
+        const modelName = selectedCard.querySelector('.fw-medium')?.childNodes[0]?.textContent?.trim() || visionModel;
         const ok = confirm(
-            `"${selectedCard.querySelector('.fw-medium').textContent.trim()}" (${size}) is not downloaded yet.\n\n` +
-            `It will be downloaded automatically when the pipeline starts. This may take several minutes.\n\n` +
+            `"${modelName}" (${sizeHint}) is not downloaded yet.\n\n` +
+            `It will be downloaded automatically when the pipeline starts. This may take several minutes depending on your connection.\n\n` +
             `Continue?`
         );
         if (!ok) return;
@@ -763,6 +755,83 @@ function pollAIProgress(taskId) {
             // Network error / server restart — keep polling; server will mark task interrupted
         });
     }, 2000);
+}
+
+// ============================================================
+// Vision model download progress polling
+// ============================================================
+
+function pollModelDownloads() {
+    fetch('/ai/models/download-status')
+        .then(r => r.json())
+        .then(data => {
+            let anyActive = false;
+
+            Object.entries(data.status).forEach(([key, info]) => {
+                const card = document.querySelector(`.model-option[data-model="${key}"]`);
+                if (!card) return;
+
+                const progressWrap = card.querySelector('.model-dl-progress');
+                const bar          = card.querySelector('.model-dl-bar');
+                const msg          = card.querySelector('.model-dl-msg');
+                const badge        = card.querySelector('.model-dl-badge');
+                const sub          = card.querySelector('.model-dl-sub');
+
+                if (info.status === 'queued' || info.status === 'downloading') {
+                    anyActive = true;
+
+                    // Show progress bar
+                    if (progressWrap) progressWrap.style.display = '';
+                    if (bar) bar.style.width = (info.percent || 0) + '%';
+                    if (msg) msg.textContent = info.message || '';
+
+                    // Update badge
+                    if (badge) {
+                        badge.textContent = info.status === 'queued' ? 'Queued…' : `${info.percent || 0}%`;
+                        badge.className = 'badge bg-warning text-dark model-dl-badge';
+                        badge.style.fontSize = '0.6rem';
+                    }
+
+                    // Disable radio while downloading so user can't select a mid-download model
+                    const radio = card.querySelector('input[type="radio"]');
+                    if (radio) radio.disabled = true;
+
+                } else if (info.status === 'done') {
+                    // Hide progress bar, mark downloaded
+                    if (progressWrap) progressWrap.style.display = 'none';
+                    if (badge) {
+                        badge.textContent = 'Downloaded';
+                        badge.className = 'badge bg-success model-dl-badge';
+                        badge.style.fontSize = '0.6rem';
+                    }
+                    if (sub && sub.dataset.noted) {
+                        // Remove the "will download on first use" note
+                        sub.textContent = sub.textContent.replace(' · will download on first use', '');
+                        delete sub.dataset.noted;
+                    }
+                    const radio = card.querySelector('input[type="radio"]');
+                    if (radio) radio.disabled = false;
+
+                } else if (info.status === 'error') {
+                    if (progressWrap) progressWrap.style.display = 'none';
+                    if (badge) {
+                        badge.textContent = 'Download failed';
+                        badge.className = 'badge bg-danger model-dl-badge';
+                        badge.style.fontSize = '0.6rem';
+                    }
+                    if (msg) { msg.textContent = info.message || 'Download failed'; msg.className = 'model-dl-msg text-danger mt-1'; msg.style.fontSize = '0.6rem'; msg.style.display = ''; }
+                    const radio = card.querySelector('input[type="radio"]');
+                    if (radio) radio.disabled = false;
+                }
+            });
+
+            // Keep polling while downloads are active; back off to 3s to reduce load
+            if (anyActive) setTimeout(pollModelDownloads, 3000);
+        })
+        .catch(() => {
+            // Server not yet ready — retry in 5s
+            setTimeout(pollModelDownloads, 5000);
+        });
 }
 
 function resetAIGenerateBtn() {
