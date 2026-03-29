@@ -66,17 +66,22 @@ document.addEventListener('DOMContentLoaded', () => {
         fpsSlider.addEventListener('input', function() {
             const fpsValue = parseFloat(this.value);
             fpsDisplay.textContent = fpsValue + ' FPS';
-
-            // Show frame count estimate if video is loaded
-            if (videoDuration > 0) {
-                const estimatedFrames = Math.round(videoDuration * fpsValue);
-                const helpText = document.getElementById('ai-fps-help');
-                if (helpText) {
-                    helpText.textContent = `~${estimatedFrames.toLocaleString()} frames for this video`;
-                }
-            }
+            updateFpsEstimates(fpsValue);
         });
     }
+
+    // Fetch system info and show device badge
+    fetch('/system/info')
+        .then(r => r.json())
+        .then(info => {
+            const badge = document.getElementById('system-badge');
+            const nameEl = document.getElementById('device-name');
+            if (badge && nameEl) {
+                nameEl.textContent = info.device_name;
+                badge.classList.remove('d-none');
+            }
+        })
+        .catch(() => {}); // silently ignore if unavailable
 });
 
 function handleFiles(file) {
@@ -136,7 +141,13 @@ function setupEditor(videoPath, metadata) {
     player.load();
     
     videoDuration = metadata.duration;
-    
+
+    // Update FPS estimates now that duration is known
+    const fpsSlider = document.getElementById('ai-fps-slider');
+    if (fpsSlider) {
+        updateFpsEstimates(parseFloat(fpsSlider.value));
+    }
+
     // Formatting metadata
     const res = metadata.resolution;
     const durStr = new Date(metadata.duration * 1000).toISOString().substr(11, 8);
@@ -449,8 +460,9 @@ function generateAIShorts() {
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> Starting AI Pipeline...';
 
-    // Hide editor, show AI progress
-    document.getElementById('editor-section').classList.add('d-none');
+    // Hide video/controls columns only — keep editor-section visible so ai-progress-container shows
+    document.getElementById('video-column').classList.add('d-none');
+    document.getElementById('controls-column').classList.add('d-none');
     document.getElementById('ai-progress-container').classList.remove('d-none');
 
     // Reset AI progress
@@ -473,7 +485,8 @@ function generateAIShorts() {
             alert('Error: ' + data.error);
             btn.disabled = false;
             btn.innerHTML = '<i class="bi bi-stars me-2"></i> Generate AI Shorts';
-            document.getElementById('editor-section').classList.remove('d-none');
+            document.getElementById('video-column').classList.remove('d-none');
+            document.getElementById('controls-column').classList.remove('d-none');
             document.getElementById('ai-progress-container').classList.add('d-none');
         } else {
             // Start polling for progress
@@ -484,7 +497,8 @@ function generateAIShorts() {
         alert('Error starting AI pipeline: ' + error);
         btn.disabled = false;
         btn.innerHTML = '<i class="bi bi-stars me-2"></i> Generate AI Shorts';
-        document.getElementById('editor-section').classList.remove('d-none');
+        document.getElementById('video-column').classList.remove('d-none');
+        document.getElementById('controls-column').classList.remove('d-none');
         document.getElementById('ai-progress-container').classList.add('d-none');
     });
 }
@@ -504,6 +518,9 @@ function pollAIProgress(taskId) {
                 alert('Error: ' + data.error);
                 document.getElementById('ai-generate-btn').disabled = false;
                 document.getElementById('ai-generate-btn').innerHTML = '<i class="bi bi-stars me-2"></i> Generate AI Shorts';
+                document.getElementById('video-column').classList.remove('d-none');
+                document.getElementById('controls-column').classList.remove('d-none');
+                document.getElementById('ai-progress-container').classList.add('d-none');
                 return;
             }
 
@@ -523,6 +540,9 @@ function pollAIProgress(taskId) {
                 alert('AI processing failed: ' + (data.error || 'Unknown error'));
                 document.getElementById('ai-generate-btn').disabled = false;
                 document.getElementById('ai-generate-btn').innerHTML = '<i class="bi bi-stars me-2"></i> Generate AI Shorts';
+                document.getElementById('video-column').classList.remove('d-none');
+                document.getElementById('controls-column').classList.remove('d-none');
+                document.getElementById('ai-progress-container').classList.add('d-none');
             }
         })
         .catch(error => {
@@ -599,26 +619,38 @@ function highlightPipelineStep(step) {
 }
 
 function showAIResults(data) {
-    // Hide progress section
-    document.getElementById('ai-progress-container').classList.add('d-none');
+    // Swap spinner → success icon
+    const spinner = document.getElementById('ai-spinner');
+    const successIcon = document.getElementById('ai-success-icon');
+    if (spinner) spinner.classList.add('d-none');
+    if (successIcon) successIcon.classList.remove('d-none');
 
-    // Show results section
-    document.getElementById('results-section').classList.remove('d-none');
+    // Brief pause so the user sees 100% / success, then switch to results
+    setTimeout(() => {
+        document.getElementById('ai-progress-container').classList.add('d-none');
+        document.getElementById('results-section').classList.remove('d-none');
 
-    // Load and display shorts
-    if (data.shorts && data.shorts.length > 0) {
-        displayShorts(data.shorts);
-    }
+        const result = data.result || {};
 
-    // Show story if available
-    if (data.story_path) {
-        loadStory(data.story_path);
-    }
+        // Display shorts
+        const shorts = result.shorts || [];
+        if (shorts.length > 0) {
+            displayShorts(shorts);
+        }
 
-    // Update stats
-    if (data.stats) {
-        updateStats(data.stats);
-    }
+        // Display story
+        const story = result.story || {};
+        if (story.full_story) {
+            loadStory(story.full_story);
+        }
+
+        // Update stats
+        updateStats({
+            frames: data.frame_count || result.frame_count || 0,
+            moments: data.moment_count || result.moment_count || 0,
+            shorts: result.short_count || shorts.length
+        });
+    }, 800);
 }
 
 function displayShorts(shorts) {
@@ -627,13 +659,13 @@ function displayShorts(shorts) {
 
     grid.innerHTML = '';
 
-    shorts.forEach((short, index) => {
-        const card = createShortCard(short, index);
+    shorts.forEach(short => {
+        const card = createShortCard(short);
         grid.appendChild(card);
     });
 }
 
-function createShortCard(short, index) {
+function createShortCard(short) {
     const card = document.createElement('div');
     card.className = 'short-card';
 
@@ -669,25 +701,115 @@ function createShortCard(short, index) {
     });
 
     // Add click handler to show details
-    card.addEventListener('click', () => showShortDetails(short, index));
+    card.addEventListener('click', () => showShortDetails(short));
 
     return card;
 }
 
-function showShortDetails(short, index) {
-    // Show modal with short details
-    // This is a placeholder - implement based on your modal structure
-    console.log('Show short details:', short);
+function showShortDetails(short) {
+    const moment = short.moment || {};
+    const metadata = short.metadata || {};
+
+    // Video
+    const videoSource = document.getElementById('modal-video-source');
+    const videoEl = document.getElementById('modal-video');
+    if (videoSource && videoEl) {
+        videoSource.src = short.web_video_path || '';
+        videoEl.load();
+    }
+
+    // Badges
+    const category = (moment.category || 'INTENSE').toUpperCase();
+    const categoryBadge = document.getElementById('modal-category-badge');
+    if (categoryBadge) {
+        const colorMap = { 'INTENSE': 'bg-danger', 'FUNNY': 'bg-warning text-dark', 'CLUTCH': 'bg-success', 'SKILLFUL': 'bg-info text-dark' };
+        categoryBadge.className = `badge rounded-pill me-2 ${colorMap[category] || 'bg-secondary'}`;
+        categoryBadge.textContent = category;
+    }
+
+    const viralityEl = document.getElementById('modal-virality-score');
+    if (viralityEl) viralityEl.textContent = moment.virality_score || 5;
+
+    const durationEl = document.getElementById('modal-duration');
+    if (durationEl) durationEl.textContent = short.duration || 0;
+
+    // Title & description
+    const titleEl = document.getElementById('modal-short-title');
+    if (titleEl) titleEl.textContent = metadata.title || 'Untitled';
+
+    const descEl = document.getElementById('modal-description');
+    if (descEl) descEl.textContent = metadata.description || '—';
+
+    // Tags
+    const tagsEl = document.getElementById('modal-tags');
+    if (tagsEl) {
+        const tags = metadata.tags || [];
+        tagsEl.innerHTML = tags.map(t => `<span class="badge bg-dark rounded-pill me-1 mb-1">#${t}</span>`).join('');
+    }
+
+    // Timestamp
+    const tsEl = document.getElementById('modal-timestamp');
+    if (tsEl) {
+        const fmt = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+        tsEl.textContent = `${fmt(moment.start_time || 0)} – ${fmt(moment.end_time || 0)}`;
+    }
+
+    // Download button
+    const dlBtn = document.getElementById('modal-download-btn');
+    if (dlBtn) dlBtn.href = short.web_video_path || '#';
+
+    // Open modal
+    const modal = bootstrap.Modal.getOrCreateInstance(document.getElementById('shortDetailModal'));
+    modal.show();
 }
 
-function loadStory(storyPath) {
-    // Load and display story
-    // Placeholder implementation
-    console.log('Load story from:', storyPath);
+function loadStory(storyText) {
+    const contentEl = document.getElementById('story-content');
+    if (contentEl) {
+        contentEl.textContent = storyText;
+    }
+    // Story panel is revealed when user clicks "View Story"
 }
 
 function updateStats(stats) {
-    // Update statistics display
-    // Placeholder implementation
-    console.log('Update stats:', stats);
+    const framesEl = document.getElementById('stat-frames');
+    const momentsEl = document.getElementById('stat-moments');
+    const shortsEl = document.getElementById('stat-shorts');
+    const statsRow = document.getElementById('ai-stats-row');
+
+    if (framesEl) framesEl.textContent = (stats.frames || 0).toLocaleString();
+    if (momentsEl) momentsEl.textContent = stats.moments || 0;
+    if (shortsEl) shortsEl.textContent = stats.shorts || 0;
+    if (statsRow) statsRow.classList.remove('d-none');
+}
+
+function toggleStoryView() {
+    const panel = document.getElementById('story-panel');
+    if (panel) panel.classList.toggle('d-none');
+}
+
+function copyToClipboard(elementId) {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+    navigator.clipboard.writeText(el.textContent.trim()).catch(() => {});
+}
+
+function updateFpsEstimates(fpsValue) {
+    const helpText = document.getElementById('ai-fps-help');
+    const framesEl = document.getElementById('estimated-frames');
+    const timeEl = document.getElementById('estimated-time');
+
+    if (videoDuration > 0) {
+        const estimatedFrames = Math.round(videoDuration * fpsValue);
+        const estimatedSecs = Math.round(estimatedFrames * 1.5); // ~1.5s per frame
+        const estimatedMin = Math.max(1, Math.round(estimatedSecs / 60));
+
+        if (helpText) helpText.textContent = `~${estimatedFrames.toLocaleString()} frames for this video`;
+        if (framesEl) framesEl.textContent = estimatedFrames.toLocaleString();
+        if (timeEl) timeEl.textContent = `~${estimatedMin} min`;
+    } else {
+        if (helpText) helpText.textContent = 'Adjust slider to set frame extraction rate';
+        if (framesEl) framesEl.textContent = '—';
+        if (timeEl) timeEl.textContent = '—';
+    }
 }
