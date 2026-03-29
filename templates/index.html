@@ -223,6 +223,47 @@
                                 </div>
                             </div>
 
+                            <!-- Vision Model Selector -->
+                            <div class="mb-3">
+                                <label class="form-label text-muted small mb-2">Vision Model</label>
+                                <div class="d-flex flex-column gap-2" id="model-selector">
+
+                                    <label class="d-flex align-items-center p-2 rounded border model-option" data-model="blip-base" style="cursor:pointer; border-color: var(--bs-primary) !important; background: rgba(13,110,253,0.08);">
+                                        <input type="radio" name="vision-model" value="blip-base" class="me-2" checked>
+                                        <div class="flex-grow-1">
+                                            <div class="d-flex align-items-center gap-1">
+                                                <span class="text-white small fw-medium">BLIP Base</span>
+                                                <span class="badge bg-success" style="font-size:0.6rem">Current</span>
+                                            </div>
+                                            <div class="text-muted" style="font-size:0.65rem">~1 GB &nbsp;·&nbsp; Fast &nbsp;·&nbsp; Good accuracy</div>
+                                        </div>
+                                    </label>
+
+                                    <label class="d-flex align-items-center p-2 rounded border border-secondary border-opacity-25 model-option" data-model="blip-large" style="cursor:pointer; background: rgba(255,255,255,0.03);">
+                                        <input type="radio" name="vision-model" value="blip-large" class="me-2">
+                                        <div class="flex-grow-1">
+                                            <div class="d-flex align-items-center gap-1">
+                                                <span class="text-white small fw-medium">BLIP Large</span>
+                                                <span class="badge bg-info text-dark" style="font-size:0.6rem">Better</span>
+                                            </div>
+                                            <div class="text-muted" style="font-size:0.65rem">~1.5 GB &nbsp;·&nbsp; Medium &nbsp;·&nbsp; Better accuracy</div>
+                                        </div>
+                                    </label>
+
+                                    <label class="d-flex align-items-center p-2 rounded border border-secondary border-opacity-25 model-option" data-model="blip2" style="cursor:pointer; background: rgba(255,255,255,0.03);">
+                                        <input type="radio" name="vision-model" value="blip2" class="me-2">
+                                        <div class="flex-grow-1">
+                                            <div class="d-flex align-items-center gap-1">
+                                                <span class="text-white small fw-medium">BLIP-2</span>
+                                                <span class="badge bg-warning text-dark" style="font-size:0.6rem">Best</span>
+                                            </div>
+                                            <div class="text-muted" style="font-size:0.65rem">~5.5 GB &nbsp;·&nbsp; Slow &nbsp;·&nbsp; Best accuracy &nbsp;·&nbsp; downloads on first use</div>
+                                        </div>
+                                    </label>
+
+                                </div>
+                            </div>
+
                             <div class="mb-3 p-2 bg-dark rounded small">
                                 <div class="d-flex justify-content-between text-muted mb-1">
                                     <span>Estimated frames:</span>

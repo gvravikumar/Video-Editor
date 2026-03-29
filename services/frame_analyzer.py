@@ -13,13 +13,43 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Global model cache to avoid reloading
-_model = None
-_processor = None
-_device = None
-
-MODEL_NAME = "Salesforce/blip-image-captioning-base"
 MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
+
+# Available vision models — user picks one in the UI before running the pipeline
+AVAILABLE_MODELS = {
+    "blip-base": {
+        "model_id": "Salesforce/blip-image-captioning-base",
+        "local_dir": "blip-captioning-base",
+        "display_name": "BLIP Base",
+        "size_label": "~1 GB",
+        "speed_label": "Fast",
+        "quality_label": "Good",
+        "variant": "blip",
+    },
+    "blip-large": {
+        "model_id": "Salesforce/blip-image-captioning-large",
+        "local_dir": "blip-captioning-large",
+        "display_name": "BLIP Large",
+        "size_label": "~1.5 GB",
+        "speed_label": "Medium",
+        "quality_label": "Better",
+        "variant": "blip",
+    },
+    "blip2": {
+        "model_id": "Salesforce/blip2-opt-2.7b",
+        "local_dir": "blip2-opt-2.7b",
+        "display_name": "BLIP-2",
+        "size_label": "~5.5 GB",
+        "speed_label": "Slow",
+        "quality_label": "Best",
+        "variant": "blip2",
+    },
+}
+DEFAULT_MODEL = "blip-base"
+
+# Per-model cache: model_key -> (model, processor, device)
+_loaded_models = {}
+_device = None
 
 
 def get_device():
@@ -35,59 +65,96 @@ def get_device():
         return torch.device("cpu")
 
 
-def load_model():
-    """Load BLIP model and processor. Downloads on first run, cached locally."""
-    global _model, _processor, _device
+def load_model(model_key=DEFAULT_MODEL):
+    """
+    Load the requested vision model and processor.
+    Downloads on first use and caches locally. Results are cached in memory per model key.
+    """
+    global _loaded_models, _device
 
-    if _model is not None and _processor is not None:
-        return _model, _processor, _device
+    if model_key not in AVAILABLE_MODELS:
+        logger.warning(f"Unknown model key '{model_key}', falling back to {DEFAULT_MODEL}")
+        model_key = DEFAULT_MODEL
 
-    from transformers import BlipProcessor, BlipForConditionalGeneration
+    if model_key in _loaded_models:
+        return _loaded_models[model_key]
+
+    if _device is None:
+        _device = get_device()
+    device = _device
+
+    config = AVAILABLE_MODELS[model_key]
+    model_id = config["model_id"]
+    local_path = os.path.join(MODELS_DIR, config["local_dir"])
+    variant = config["variant"]
 
     os.makedirs(MODELS_DIR, exist_ok=True)
-    model_path = os.path.join(MODELS_DIR, "blip-captioning-base")
+    logger.info(f"Loading {config['display_name']} ({model_id})...")
 
-    _device = get_device()
+    cached = os.path.exists(os.path.join(local_path, "config.json"))
 
-    logger.info(f"Loading BLIP model from {model_path}...")
-
-    # Check if model exists locally
-    if os.path.exists(os.path.join(model_path, "config.json")):
-        logger.info("Loading model from local cache...")
-        _processor = BlipProcessor.from_pretrained(model_path)
-        _model = BlipForConditionalGeneration.from_pretrained(model_path)
+    if variant == "blip2":
+        from transformers import Blip2Processor, Blip2ForConditionalGeneration
+        # BLIP-2 is large — float16 saves ~half the VRAM/RAM on GPU/MPS
+        dtype = torch.float16 if device.type in ("cuda", "mps") else torch.float32
+        if cached:
+            processor = Blip2Processor.from_pretrained(local_path)
+            model = Blip2ForConditionalGeneration.from_pretrained(local_path, torch_dtype=dtype)
+        else:
+            logger.info(f"Downloading {config['display_name']} ({config['size_label']})... this may take a while.")
+            processor = Blip2Processor.from_pretrained(model_id)
+            model = Blip2ForConditionalGeneration.from_pretrained(model_id, torch_dtype=dtype)
+            processor.save_pretrained(local_path)
+            model.save_pretrained(local_path)
     else:
-        logger.info(f"Downloading BLIP model ({MODEL_NAME})... This may take a few minutes.")
-        _processor = BlipProcessor.from_pretrained(MODEL_NAME)
-        _model = BlipForConditionalGeneration.from_pretrained(MODEL_NAME)
-        # Save locally for offline use
-        _processor.save_pretrained(model_path)
-        _model.save_pretrained(model_path)
-        logger.info(f"Model saved to {model_path}")
+        from transformers import BlipProcessor, BlipForConditionalGeneration
+        if cached:
+            processor = BlipProcessor.from_pretrained(local_path)
+            model = BlipForConditionalGeneration.from_pretrained(local_path)
+        else:
+            logger.info(f"Downloading {config['display_name']} ({config['size_label']})... this may take a few minutes.")
+            processor = BlipProcessor.from_pretrained(model_id)
+            model = BlipForConditionalGeneration.from_pretrained(model_id)
+            processor.save_pretrained(local_path)
+            model.save_pretrained(local_path)
 
-    _model = _model.to(_device)
-    _model.eval()
+    model = model.to(device)
+    model.eval()
 
-    logger.info("BLIP model loaded successfully.")
-    return _model, _processor, _device
+    _loaded_models[model_key] = (model, processor, device)
+    logger.info(f"{config['display_name']} loaded on {device}.")
+    return model, processor, device
 
 
-def caption_single_frame(image_path, model=None, processor=None, device=None):
+def _get_prompt(model_key):
+    """Return the generation prompt for the given model variant."""
+    config = AVAILABLE_MODELS.get(model_key, AVAILABLE_MODELS[DEFAULT_MODEL])
+    if config["variant"] == "blip2":
+        # BLIP-2 (OPT backbone) works best with an instruction-style prompt
+        return "Question: Describe the action and intensity of this gameplay screenshot in detail. Answer:"
+    return "a video game action scene showing"
+
+
+def caption_single_frame(image_path, model=None, processor=None, device=None, model_key=DEFAULT_MODEL):
     """Generate a caption for a single image frame."""
     if model is None or processor is None or device is None:
-        model, processor, device = load_model()
+        model, processor, device = load_model(model_key)
 
+    config = AVAILABLE_MODELS.get(model_key, AVAILABLE_MODELS[DEFAULT_MODEL])
     image = Image.open(image_path).convert("RGB")
+    prompt = _get_prompt(model_key)
 
-    # Conditional generation with a gameplay-oriented prompt
-    prompt = "a gameplay screenshot showing"
-    inputs = processor(image, text=prompt, return_tensors="pt").to(device)
+    if config["variant"] == "blip2":
+        dtype = next(model.parameters()).dtype
+        inputs = processor(images=image, text=prompt, return_tensors="pt").to(device, dtype)
+    else:
+        inputs = processor(image, text=prompt, return_tensors="pt").to(device)
 
     with torch.no_grad():
         output = model.generate(
             **inputs,
-            max_new_tokens=50,
-            num_beams=3,
+            max_new_tokens=75,
+            num_beams=5,
             early_stopping=True
         )
 
@@ -95,20 +162,25 @@ def caption_single_frame(image_path, model=None, processor=None, device=None):
     return caption
 
 
-def analyze_frames(frames_dir, manifest_path=None, progress_callback=None):
+def analyze_frames(frames_dir, manifest_path=None, progress_callback=None, vision_model=DEFAULT_MODEL):
     """
     Analyze all extracted frames and generate captions.
-    
+
     Args:
         frames_dir: Directory containing extracted frame images
         manifest_path: Path to frames manifest JSON (optional, auto-detected)
         progress_callback: Optional callable(current, total, status_message)
-    
+        vision_model: Model key from AVAILABLE_MODELS (default: "blip-base")
+
     Returns:
         dict with:
             - captions: list of {index, timestamp, filename, caption}
             - total_frames: number of frames processed
     """
+    if vision_model not in AVAILABLE_MODELS:
+        logger.warning(f"Unknown vision_model '{vision_model}', falling back to {DEFAULT_MODEL}")
+        vision_model = DEFAULT_MODEL
+    model_config = AVAILABLE_MODELS[vision_model]
     # Load manifest
     if manifest_path is None:
         manifest_path = os.path.join(frames_dir, "manifest.json")
@@ -119,16 +191,17 @@ def analyze_frames(frames_dir, manifest_path=None, progress_callback=None):
     frames = manifest["frames"]
     total = len(frames)
 
-    logger.info(f"Analyzing {total} frames with BLIP model...")
+    logger.info(f"Analyzing {total} frames with {model_config['display_name']}...")
 
     if progress_callback:
-        progress_callback(0, total, "Loading AI model for frame analysis...")
+        progress_callback(0, total, f"Loading {model_config['display_name']} ({model_config['size_label']})...")
 
-    # Load model
-    model, processor, device = load_model()
+    # Load the requested model
+    model, processor, device = load_model(vision_model)
+    prompt = _get_prompt(vision_model)
 
     if progress_callback:
-        progress_callback(0, total, "AI model loaded. Starting frame analysis...")
+        progress_callback(0, total, f"{model_config['display_name']} loaded. Starting frame analysis...")
 
     captions = []
     batch_size = 8  # Process in small batches for memory efficiency
@@ -143,7 +216,7 @@ def analyze_frames(frames_dir, manifest_path=None, progress_callback=None):
             if os.path.exists(img_path):
                 image = Image.open(img_path).convert("RGB")
                 batch_images.append(image)
-                batch_prompts.append("a gameplay screenshot showing")
+                batch_prompts.append(prompt)
             else:
                 logger.warning(f"Frame not found: {img_path}")
                 batch_images.append(None)
@@ -156,18 +229,27 @@ def analyze_frames(frames_dir, manifest_path=None, progress_callback=None):
 
         if valid_images:
             try:
-                inputs = processor(
-                    images=valid_images,
-                    text=valid_prompts,
-                    return_tensors="pt",
-                    padding=True
-                ).to(device)
+                if model_config["variant"] == "blip2":
+                    dtype = next(model.parameters()).dtype
+                    inputs = processor(
+                        images=valid_images,
+                        text=valid_prompts,
+                        return_tensors="pt",
+                        padding=True
+                    ).to(device, dtype)
+                else:
+                    inputs = processor(
+                        images=valid_images,
+                        text=valid_prompts,
+                        return_tensors="pt",
+                        padding=True
+                    ).to(device)
 
                 with torch.no_grad():
                     outputs = model.generate(
                         **inputs,
-                        max_new_tokens=50,
-                        num_beams=3,
+                        max_new_tokens=75,
+                        num_beams=5,
                         early_stopping=True
                     )
 
@@ -199,7 +281,7 @@ def analyze_frames(frames_dir, manifest_path=None, progress_callback=None):
                         try:
                             caption = caption_single_frame(
                                 os.path.join(frames_dir, frame_info["filename"]),
-                                model, processor, device
+                                model, processor, device, model_key=vision_model
                             )
                             captions.append({
                                 "index": frame_info["index"],
@@ -227,7 +309,8 @@ def analyze_frames(frames_dir, manifest_path=None, progress_callback=None):
     captions_path = os.path.join(frames_dir, "captions.json")
     captions_data = {
         "total_frames": len(captions),
-        "model": MODEL_NAME,
+        "model": model_config["model_id"],
+        "model_key": vision_model,
         "device": str(device),
         "captions": captions
     }

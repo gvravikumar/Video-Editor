@@ -5,6 +5,7 @@ then detects key moments using keyword/pattern matching on the actual caption te
 """
 
 import os
+import re
 import json
 import logging
 from pathlib import Path
@@ -133,14 +134,37 @@ def detect_moments(captions_data, progress_callback=None):
 
 
 
+def _match_keywords(text, word_list):
+    """
+    Match keywords against text with word-boundary checking for single words.
+    Multi-word phrases use substring match. Returns (hit_count, unique_matched_set).
+    """
+    unique_matched = set()
+    for word in word_list:
+        if ' ' in word:
+            # Multi-word phrase: substring match
+            if word in text:
+                unique_matched.add(word)
+        else:
+            # Single word: word boundary to avoid false positives (e.g. "fire" ≠ "fireworks")
+            if re.search(r'\b' + re.escape(word) + r'\b', text):
+                unique_matched.add(word)
+    return len(unique_matched), unique_matched
+
+
 def _heuristic_moment_detection(captions):
     """
     Detect moments based on what BLIP actually reports in captions.
     Keywords are chosen to match BLIP's vocabulary for gameplay visuals.
+    Uses word-boundary matching to avoid false positives, and rewards
+    keyword diversity (many different keywords = genuinely intense window).
     """
     moments = []
 
-    # Keywords matched against BLIP caption text (lowercase)
+    # Keywords matched against BLIP caption text (lowercase).
+    # INTENSE list is expanded to cover BLIP's actual descriptive vocabulary:
+    # BLIP describes what it sees literally ("soldier", "armed", "group of enemies")
+    # rather than game-mechanic terms ("combo", "kill streak").
     keywords = {
         "WINNING": [
             "victory", "win", "won", "champion", "conquered", "captured",
@@ -157,14 +181,32 @@ def _heuristic_moment_detection(captions):
             "perfect", "combo", "streak", "clutch", "amazing", "incredible",
             "build", "castle", "wonder", "craft", "constructed", "assembled",
             "lineup", "collection", "organized", "full", "completed",
-            "chain", "multiple", "simultaneous"
+            "chain", "simultaneous"
         ],
         "INTENSE": [
-            "battle", "fight", "attack", "explosion", "fire", "war", "combat",
-            "siege", "rush", "shooting", "running", "chasing", "fleeing",
-            "surrounded", "crowd", "multiple enemies", "rapid", "fast",
-            "charging", "enemies", "soldiers", "weapons", "gun", "sword",
-            "flying", "racing", "crash", "collision", "impact"
+            # Combat actions — verbs BLIP commonly outputs for action frames
+            "battle", "fight", "fighting", "attack", "attacking", "combat",
+            "war", "warfare", "siege", "assault", "ambush", "raid", "brawl",
+            "duel", "clash",
+            # Weapons — nouns BLIP identifies in gameplay frames
+            "gun", "guns", "sword", "weapon", "weapons", "armed", "explosive",
+            "grenade", "missile", "arrow", "spear", "bomb", "rifle", "pistol",
+            "cannon", "shotgun", "sniper",
+            # Effects / events
+            "explosion", "exploding", "fire", "flames", "smoke", "debris",
+            "destruction", "crash", "collision", "impact", "blast", "burning",
+            # Movement / pursuit — BLIP often describes rapid movement
+            "running", "chasing", "fleeing", "rushing", "charging", "sprinting",
+            "pursuit", "escaping", "retreating", "diving", "jumping",
+            # Groups / armies — BLIP describes crowds as "group of soldiers" etc.
+            "army", "soldiers", "troops", "enemies", "crowd", "horde", "squad",
+            "surrounded", "outnumbered", "group of enemies", "group of soldiers",
+            # Vehicles / air
+            "tank", "helicopter", "plane", "aircraft", "speeding", "racing",
+            "flying", "airborne",
+            # Generic intensity signals in BLIP captions
+            "dangerous", "intense", "chaos", "chaotic", "rapid", "fast",
+            "aggressive", "hostile"
         ],
         "FUNNY": [
             "funny", "glitch", "bug", "weird", "odd", "strange", "stuck",
@@ -183,8 +225,11 @@ def _heuristic_moment_detection(captions):
         combined_text = " ".join([c["caption"].lower() for c in window])
 
         category_scores = {}
+        category_unique = {}
         for category, words in keywords.items():
-            category_scores[category] = sum(1 for word in words if word in combined_text)
+            score, matched = _match_keywords(combined_text, words)
+            category_scores[category] = score
+            category_unique[category] = matched
 
         best_category = max(category_scores, key=category_scores.get)
         best_score = category_scores[best_category]
@@ -199,13 +244,18 @@ def _heuristic_moment_detection(captions):
         if end_time - start_time < 30:
             end_time = min(start_time + 45, last_caption_ts)
 
-        # Virality: score × 2, bonus +2 for WINNING/LOSING (most shareable)
-        virality = min(10, best_score * 2 + (2 if best_category in ("WINNING", "LOSING") else 0))
+        # Diversity bonus: ≥4 different keywords matched = genuinely varied/intense window
+        unique_count = len(category_unique[best_category])
+        diversity_bonus = 1 if unique_count >= 4 else 0
+
+        # Virality: score × 2, +2 for WINNING/LOSING (most shareable), +1 diversity
+        virality = min(10, best_score * 2 + diversity_bonus + (2 if best_category in ("WINNING", "LOSING") else 0))
 
         # Build description from top matching caption in window
+        matched_words = category_unique[best_category]
         top_caption = max(
             window,
-            key=lambda c: sum(1 for w in keywords[best_category] if w in c["caption"].lower())
+            key=lambda c: _match_keywords(c["caption"].lower(), keywords[best_category])[0]
         )
         description = (
             f"{best_category.capitalize()} moment around {start_time:.0f}s — "
@@ -218,7 +268,8 @@ def _heuristic_moment_detection(captions):
             "category": best_category,
             "virality_score": virality,
             "description": description,
-            "duration": round(end_time - start_time, 2)
+            "duration": round(end_time - start_time, 2),
+            "matched_keywords": sorted(matched_words)
         })
 
     # Deduplicate overlapping moments — keep the one with higher virality

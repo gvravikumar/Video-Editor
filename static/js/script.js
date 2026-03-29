@@ -105,6 +105,56 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Highlight selected model card on change
+    document.querySelectorAll('input[name="vision-model"]').forEach(radio => {
+        radio.addEventListener('change', function() {
+            document.querySelectorAll('.model-option').forEach(card => {
+                card.style.borderColor = '';
+                card.style.background = 'rgba(255,255,255,0.03)';
+            });
+            const selected = this.closest('.model-option');
+            if (selected) {
+                selected.style.borderColor = 'var(--bs-primary)';
+                selected.style.background = 'rgba(13,110,253,0.08)';
+            }
+        });
+    });
+
+    // Check which vision models are already downloaded and annotate cards
+    fetch('/ai/models')
+        .then(r => r.json())
+        .then(data => {
+            data.models.forEach(m => {
+                const card = document.querySelector(`.model-option[data-model="${m.key}"]`);
+                if (!card) return;
+                const sub = card.querySelector('div > div:last-child');
+                if (!m.downloaded) {
+                    // Add "will download" note if not already present
+                    if (sub && !sub.dataset.downloadNoted) {
+                        sub.textContent += ' · will download on first use';
+                        sub.dataset.downloadNoted = '1';
+                    }
+                    // Disable BLIP-2 selection warning (still allow, just inform)
+                    const radio = card.querySelector('input[type="radio"]');
+                    if (radio) {
+                        radio.addEventListener('change', function() {
+                            if (this.checked) {
+                                const note = card.querySelector('.download-note');
+                                if (!note) {
+                                    const warn = document.createElement('div');
+                                    warn.className = 'download-note text-warning mt-1';
+                                    warn.style.fontSize = '0.65rem';
+                                    warn.textContent = `⚠ ${m.display_name} (${m.size_label}) will be downloaded automatically when the pipeline starts.`;
+                                    card.appendChild(warn);
+                                }
+                            }
+                        });
+                    }
+                }
+            });
+        })
+        .catch(() => {}); // non-critical — UI still works without it
+
     // Fetch system info and show device badge
     fetch('/system/info')
         .then(r => r.json())
@@ -594,6 +644,23 @@ function generateAIShorts() {
     // Get FPS value from slider
     const fps = parseInt(document.getElementById('ai-fps-slider').value) || 2;
 
+    // Get selected vision model
+    const visionModel = document.querySelector('input[name="vision-model"]:checked')?.value || 'blip-base';
+
+    // If the selected model is not yet downloaded, confirm before proceeding
+    const selectedCard = document.querySelector(`.model-option[data-model="${visionModel}"]`);
+    const isNotDownloaded = selectedCard && selectedCard.querySelector('.download-note');
+    if (isNotDownloaded) {
+        const modelInfo = { 'blip-large': '~1.5 GB', 'blip2': '~5.5 GB' };
+        const size = modelInfo[visionModel] || '';
+        const ok = confirm(
+            `"${selectedCard.querySelector('.fw-medium').textContent.trim()}" (${size}) is not downloaded yet.\n\n` +
+            `It will be downloaded automatically when the pipeline starts. This may take several minutes.\n\n` +
+            `Continue?`
+        );
+        if (!ok) return;
+    }
+
     // Disable button
     const btn = document.getElementById('ai-generate-btn');
     btn.disabled = true;
@@ -615,7 +682,8 @@ function generateAIShorts() {
         },
         body: JSON.stringify({
             filename: currentFilename,
-            fps: fps
+            fps: fps,
+            vision_model: visionModel
         })
     })
     .then(response => response.json())

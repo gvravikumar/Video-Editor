@@ -51,18 +51,17 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-def _compute_video_id(filepath, fps):
+def _compute_video_id(filepath, fps, vision_model="blip-base"):
     """
-    Derive a stable identifier for a (video, fps) pair.
-    Uses file size + first 1 MB of content + fps so that:
-      - the same video at the same fps always gets the same ID
-      - changing fps produces a different ID (different frame count)
-      - fast even on 2 GB files (reads only 1 MB)
+    Derive a stable identifier for a (video, fps, vision_model) triple.
+    Changing any of fps or vision_model produces a new ID so cached captions
+    from a different model are never reused.
     """
     import hashlib
     h = hashlib.sha256()
     h.update(str(os.path.getsize(filepath)).encode())
     h.update(f"{fps:.1f}".encode())
+    h.update(vision_model.encode())
     with open(filepath, 'rb') as f:
         h.update(f.read(1024 * 1024))   # first 1 MB fingerprint
     return h.hexdigest()[:20]           # 20 hex chars — collision-proof in practice
@@ -422,7 +421,7 @@ def _auto_detect_checkpoints(sm, task_id, frames_dir, stories_dir):
     # a specific task_id directory, so a new task always generates fresh clips.
 
 
-def ai_pipeline_task(task_id, input_filename, fps, video_id=None):
+def ai_pipeline_task(task_id, input_filename, fps, video_id=None, vision_model=None):
     """
     Full AI pipeline with checkpoint-based resumption:
     1. Extract frames
@@ -446,9 +445,11 @@ def ai_pipeline_task(task_id, input_filename, fps, video_id=None):
 
             input_path = os.path.join(app.config['UPLOAD_FOLDER'], input_filename)
 
-            # video_id may come from state (resume path) or parameter (fresh start)
+            # vision_model / video_id may come from state (resume) or parameter (fresh start)
+            if not vision_model:
+                vision_model = task.get('vision_model', 'blip-base')
             if not video_id:
-                video_id = task.get('video_id') or _compute_video_id(input_path, fps)
+                video_id = task.get('video_id') or _compute_video_id(input_path, fps, vision_model)
 
             # Frames + stories: shared per (video, fps) — reused across all runs
             # Shorts: per task_id — each run may produce different clips
@@ -531,10 +532,11 @@ def ai_pipeline_task(task_id, input_filename, fps, video_id=None):
                     sm.update_task(task_id, percentage=step_pct, step_message=msg, step='analyzing_frames')
                     tasks[task_id] = sm.get_task(task_id)
 
-                logger.info(f"Task {task_id}: Starting frame analysis...")
+                logger.info(f"Task {task_id}: Starting frame analysis with model={vision_model}...")
                 captions_data = analyze_frames(
                     task_frames_dir,
-                    progress_callback=analyze_progress
+                    progress_callback=analyze_progress,
+                    vision_model=vision_model
                 )
 
                 sm.add_checkpoint(task_id, 'frames_analyzed', {
@@ -714,9 +716,12 @@ def ai_pipeline_task(task_id, input_filename, fps, video_id=None):
 @app.route('/ai/start', methods=['POST'])
 def start_ai_pipeline():
     """Start the full AI analysis pipeline with persistent state."""
+    from services.frame_analyzer import AVAILABLE_MODELS, DEFAULT_MODEL
+
     data = request.json
     filename = data.get('filename')
     fps = data.get('fps', 2)
+    vision_model = data.get('vision_model', DEFAULT_MODEL)
 
     if not filename:
         return jsonify({'error': 'Filename is required'}), 400
@@ -728,12 +733,16 @@ def start_ai_pipeline():
     except (ValueError, TypeError):
         fps = 2
 
+    # Validate model key
+    if vision_model not in AVAILABLE_MODELS:
+        vision_model = DEFAULT_MODEL
+
     input_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     if not os.path.exists(input_path):
         return jsonify({'error': 'Video file not found'}), 404
 
     task_id = uuid.uuid4().hex
-    video_id = _compute_video_id(input_path, fps)
+    video_id = _compute_video_id(input_path, fps, vision_model)
 
     # Create task in state manager
     sm = get_state_manager()
@@ -743,6 +752,7 @@ def start_ai_pipeline():
         fps=fps,
         filename=filename,
         video_id=video_id,
+        vision_model=vision_model,
         step_message='Starting AI pipeline...'
     )
 
@@ -751,12 +761,12 @@ def start_ai_pipeline():
 
     thread = threading.Thread(
         target=ai_pipeline_task,
-        args=(task_id, filename, fps, video_id),
+        args=(task_id, filename, fps, video_id, vision_model),
         daemon=True
     )
     thread.start()
 
-    return jsonify({'task_id': task_id, 'status': 'success', 'fps': fps, 'video_id': video_id})
+    return jsonify({'task_id': task_id, 'status': 'success', 'fps': fps, 'video_id': video_id, 'vision_model': vision_model})
 
 
 @app.route('/ai/tasks', methods=['GET'])
@@ -849,10 +859,11 @@ def resume_task(task_id):
     if task.get('status') not in ['interrupted', 'error']:
         return jsonify({'error': 'Task is not resumable', 'status': task.get('status')}), 400
     
-    # Get task details
-    filename = task.get('filename')
-    fps      = task.get('fps', 2)
-    video_id = task.get('video_id')   # preserved from original run
+    # Get task details — vision_model preserved from the original run
+    filename     = task.get('filename')
+    fps          = task.get('fps', 2)
+    video_id     = task.get('video_id')
+    vision_model = task.get('vision_model', 'blip-base')
 
     if not filename:
         return jsonify({'error': 'Task missing filename metadata'}), 400
@@ -870,7 +881,7 @@ def resume_task(task_id):
     # Start the pipeline thread (it will detect checkpoints and resume)
     thread = threading.Thread(
         target=ai_pipeline_task,
-        args=(task_id, filename, fps, video_id),
+        args=(task_id, filename, fps, video_id, vision_model),
         daemon=True
     )
     thread.start()
@@ -1083,6 +1094,29 @@ def task_status(task_id):
     if not task:
         return jsonify({'error': 'Task not found'}), 404
     return jsonify(task)
+
+
+# ============================================================
+# ROUTES - Model Status
+# ============================================================
+
+@app.route('/ai/models', methods=['GET'])
+def ai_models():
+    """Return available vision models and whether each is already downloaded."""
+    from services.frame_analyzer import AVAILABLE_MODELS
+    result = []
+    for key, cfg in AVAILABLE_MODELS.items():
+        local_path = os.path.join(app.config['MODELS_FOLDER'], cfg['local_dir'])
+        downloaded = os.path.exists(os.path.join(local_path, 'config.json'))
+        result.append({
+            'key': key,
+            'display_name': cfg['display_name'],
+            'size_label': cfg['size_label'],
+            'speed_label': cfg['speed_label'],
+            'quality_label': cfg['quality_label'],
+            'downloaded': downloaded,
+        })
+    return jsonify({'models': result})
 
 
 # ============================================================
