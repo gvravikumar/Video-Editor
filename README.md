@@ -114,19 +114,164 @@ python app.py
 
 ## 📖 How to Use
 
-### Step 1: Upload Video
-- Drag & drop or browse to select your gameplay video
-- Supported formats: MP4, AVI, MOV, MKV, WebM
-- Max size: 2 GB
+### 🎯 **Quick Start Guide**
 
-### Step 2: Configure & Generate
-- **AI Shorts Generator** (Recommended):
-  - Adjust FPS slider (1-5 FPS)
-    - 1 FPS: Faster processing, fewer frames
-    - 5 FPS: More detailed analysis, slower
-  - Click "Generate AI Shorts"
-  - Watch the pipeline progress:
-    1. Frame extraction
+**See detailed step-by-step guide**: [USER_GUIDE.md](USER_GUIDE.md) 📘
+
+### **Basic Workflow** (5 minutes to get started)
+
+#### **Step 1: Start the App**
+```bash
+./start.sh        # macOS/Linux
+start.bat         # Windows
+```
+Browser opens to `http://127.0.0.1:8000`
+
+#### **Step 2: Upload Video**
+- **Drag & drop** your gameplay video OR
+- Click **"Browse Files"** OR
+- Select from **"Previously Uploaded Videos"** (if available)
+
+**Supported**: MP4, AVI, MOV, MKV, WebM | **Max**: 2 GB
+
+#### **Step 3: Choose AI Shorts Generator**
+1. **Set FPS** (frames per second):
+   - Move slider to **2 FPS** (recommended)
+   - Higher FPS = more detailed but slower
+
+2. Click **"Generate AI Shorts"** button
+
+#### **Step 4: Wait for AI Processing** ⏳
+
+The AI will automatically:
+1. **Extract frames** (~2 min)
+2. **Analyze with BLIP AI** (~15 min on M1 Mac, ~30-45 min on CPU)
+3. **Generate story** (~5 min)
+4. **Detect moments** (~3 min) - finds wins/losses/satisfying/intense moments
+5. **Create shorts** (~10 min) - makes 9:16 vertical videos
+6. **Generate metadata** (~2 min) - creates titles/descriptions/tags
+
+**Total Time**: ~35-40 minutes for 2-hour video (Apple M1), ~70-90 min (CPU)
+
+#### **Step 5: Download Your Shorts** 🎉
+
+After processing:
+- **Browse** all generated shorts (sorted by virality score)
+- **Hover** to preview any short
+- **Click** to view details (title, description, tags)
+- **Copy metadata** with one click
+- **Download** individual shorts or all at once
+
+Each short includes:
+- ✅ 9:16 vertical video (1080x1920) for YouTube Shorts/Instagram Reels
+- ✅ Hook-first structure (first 7 sec = climax/result)
+- ✅ AI-generated catchy title with emojis
+- ✅ Engaging description
+- ✅ 10-15 relevant hashtags
+
+---
+
+### **📚 Detailed Guides**
+
+- **Complete Tutorial**: [USER_GUIDE.md](USER_GUIDE.md) - Full step-by-step with screenshots
+- **Setup Instructions**: [SETUP.md](SETUP.md) - Installation troubleshooting
+- **Windows Setup**: [WINDOWS_SETUP.md](WINDOWS_SETUP.md) - Windows-specific guide
+- **Implementation Details**: [AUDIT_REPORT.md](AUDIT_REPORT.md) - Technical audit
+- **Model Structure**: [MODEL_STRUCTURE.md](MODEL_STRUCTURE.md) - How AI models work
+
+---
+
+### **Example Workflow**
+
+```
+1. Upload 2-hour Valorant gameplay
+   ↓
+2. Set FPS to 2 (extracts 14,400 frames)
+   ↓
+3. Click "Generate AI Shorts"
+   ↓ (35-40 min on M1 Mac)
+4. AI finds 15 epic moments:
+   • 5 WINNING (clutches, aces)
+   • 3 LOSING (funny deaths)
+   • 4 SATISFYING (perfect shots)
+   • 2 INTENSE (battles)
+   • 1 FUNNY (glitch)
+   ↓
+5. Get 15 ready-to-post shorts:
+   • Each 30-60 seconds
+   • 9:16 vertical format
+   • With titles like:
+     "🔥 INSANE 1v5 Clutch! 🎯"
+   • And descriptions:
+     "Watch this incredible comeback..."
+   • And hashtags:
+     #valorant #clutch #gaming #shorts
+   ↓
+6. Upload to YouTube/Instagram/TikTok
+   ✅ Done!
+```
+
+**Time saved vs manual editing**: ~6-7 hours! 🚀
+
+---
+
+### **Alternative: Manual Editor** (Quick Trim)
+
+If you just want to trim a video without AI:
+
+1. Upload video
+2. Set start/end times
+3. Toggle 2x speed (optional)
+4. Click "Process Video"
+5. Download trimmed video
+
+Fast and simple! ⚡
+
+---
+
+## 🎮 **What Makes a Good Gaming Short?**
+
+### **The Hook-First Formula** (Implemented by AI):
+
+```
+[0-7 sec]    = RESULT/CLIMAX     (Grabs attention!)
+               "TRIPLE KILL!"
+               "VICTORY!"
+               "CLUTCH WON!"
+[7-8 sec]    = Brief transition
+[8-end]      = BUILD-UP          (Shows how it happened)
+               The gameplay leading to the climax
+```
+
+**Why this works**:
+- Viewer sees exciting result immediately
+- Curiosity: "How did that happen?"
+- Watches full video to see the build-up
+- Higher retention = Algorithm boost 📈
+
+---
+
+## 📊 **Expected Processing Times**
+
+| Hardware | Video Length | FPS | Processing Time |
+|----------|--------------|-----|-----------------|
+| Apple M1/M2 | 2 hours | 2 | ~35-40 min |
+| Apple M1/M2 | 30 min | 2 | ~10-12 min |
+| NVIDIA RTX 3060 | 2 hours | 2 | ~30-35 min |
+| NVIDIA RTX 3060 | 30 min | 2 | ~8-10 min |
+| Intel i7 (CPU) | 2 hours | 2 | ~70-90 min |
+| Intel i7 (CPU) | 2 hours | 1 | ~35-45 min |
+| Intel i7 (CPU) | 30 min | 2 | ~20-25 min |
+
+**💡 Tip**: Use 1 FPS on CPU-only systems for 2x faster processing!
+
+---
+
+## 🎯 **AI Processing Details**
+
+When you click "Generate AI Shorts", here's what happens:
+
+### **Step 1: Frame Extraction**
     2. AI frame analysis
     3. Story generation
     4. Moment detection
