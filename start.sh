@@ -38,34 +38,9 @@ echo "Checking dependencies..."
 pip install --upgrade pip > /dev/null 2>&1
 pip install -r requirements.txt --quiet
 
-# Handle PyTorch for different platforms
-if [ "$OS" = "Darwin" ]; then
-    echo "macOS detected — PyTorch with MPS (Apple Silicon) support will be used."
-else
-    echo "Linux detected — PyTorch with CPU/CUDA support will be used."
-fi
-
-# Check if AI models are downloaded
 echo ""
-echo "Checking AI models..."
-if [ ! -d "models/blip-captioning-base" ] || [ ! -d "models/tinyllama-chat" ]; then
-    echo "⚠️  AI models not found locally."
-    echo ""
-    echo "To enable offline operation, please download models first:"
-    echo "    python download_models.py"
-    echo ""
-    echo "Models will be automatically downloaded on first use (requires internet)."
-    echo "Total download size: ~3.2 GB"
-    echo ""
-    read -p "Continue anyway? (y/n) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "Cancelled. Please run: python download_models.py"
-        exit 1
-    fi
-else
-    echo "✓ AI models found locally (offline mode ready)"
-fi
+echo "AI engine: agent-in-the-loop (Copilot) — no local models to download."
+echo "Make sure FFmpeg is installed (brew install ffmpeg / apt install ffmpeg)."
 
 echo ""
 echo "Starting the Flask server..."

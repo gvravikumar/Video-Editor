@@ -105,46 +105,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Highlight selected model card on change
-    document.querySelectorAll('input[name="vision-model"]').forEach(radio => {
-        radio.addEventListener('change', function() {
-            document.querySelectorAll('.model-option').forEach(card => {
-                card.style.borderColor = '';
-                card.style.background = 'rgba(255,255,255,0.03)';
-            });
-            const selected = this.closest('.model-option');
-            if (selected) {
-                selected.style.borderColor = 'var(--bs-primary)';
-                selected.style.background = 'rgba(13,110,253,0.08)';
-            }
-        });
-    });
-
-    // Check which models are downloaded and start polling for any active downloads
-    fetch('/ai/models')
-        .then(r => r.json())
-        .then(data => {
-            data.models.forEach(m => {
-                const card = document.querySelector(`.model-option[data-model="${m.key}"]`);
-                if (!card) return;
-                if (m.downloaded) {
-                    // Mark badge as Downloaded if it isn't already
-                    const badge = card.querySelector('.model-dl-badge');
-                    if (badge) { badge.textContent = 'Downloaded'; badge.className = 'badge bg-success model-dl-badge'; badge.style.fontSize = '0.6rem'; }
-                } else {
-                    const sub = card.querySelector('.model-dl-sub');
-                    if (sub && !sub.dataset.noted) {
-                        sub.textContent += ' · will download on first use';
-                        sub.dataset.noted = '1';
-                    }
-                }
-            });
-        })
-        .catch(() => {});
-
-    // Poll /ai/models/download-status while any download is queued or in-progress
-    pollModelDownloads();
-
     // Fetch system info and show device badge
     fetch('/system/info')
         .then(r => r.json())
@@ -601,8 +561,7 @@ async function selectPreviousFile(file) {
                         resumeTask(taskId);
                         return;
                     }
-                } else if (['queued', 'extracting_frames', 'analyzing_frames',
-                             'generating_story', 'generating_shorts', 'generating_metadata'].includes(data.status)) {
+                } else if (['queued', 'pending_frames', 'awaiting_agent', 'plan_ready', 'rendering'].includes(data.status)) {
                     setupEditor(file.url, metadata);
                     if (confirm(`AI processing is in progress (${data.percentage || 0}%).\nReconnect to live progress?`)) {
                         currentTaskId = taskId;
@@ -634,29 +593,10 @@ function generateAIShorts() {
     // Get FPS value from slider
     const fps = parseFloat(document.getElementById('ai-fps-slider').value) || 2;
 
-    // Get selected vision model
-    const visionModel = document.querySelector('input[name="vision-model"]:checked')?.value || 'blip-base';
-
-    // Warn if selected model still needs to be downloaded (BLIP-2 / any model not yet on disk)
-    const selectedCard = document.querySelector(`.model-option[data-model="${visionModel}"]`);
-    const badge = selectedCard && selectedCard.querySelector('.model-dl-badge');
-    const isNotDownloaded = badge && badge.textContent !== 'Downloaded';
-    if (isNotDownloaded) {
-        const sub = selectedCard.querySelector('.model-dl-sub');
-        const sizeHint = sub ? sub.textContent.split('·')[0].trim() : '';
-        const modelName = selectedCard.querySelector('.fw-medium')?.childNodes[0]?.textContent?.trim() || visionModel;
-        const ok = confirm(
-            `"${modelName}" (${sizeHint}) is not downloaded yet.\n\n` +
-            `It will be downloaded automatically when the pipeline starts. This may take several minutes depending on your connection.\n\n` +
-            `Continue?`
-        );
-        if (!ok) return;
-    }
-
     // Disable button
     const btn = document.getElementById('ai-generate-btn');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> Starting AI Pipeline...';
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> Starting AI Agent...';
 
     // Hide video/controls columns only — keep editor-section visible so ai-progress-container shows
     document.getElementById('video-column').classList.add('d-none');
@@ -666,7 +606,8 @@ function generateAIShorts() {
     // Reset AI progress
     resetAIProgress();
 
-    // Start AI pipeline via persistent /ai/start endpoint
+    // Start AI job via /ai/start endpoint (agent-in-the-loop)
+    const smooth = document.getElementById('ai-smooth-toggle')?.checked ?? false;
     fetch('/ai/start', {
         method: 'POST',
         headers: {
@@ -675,7 +616,7 @@ function generateAIShorts() {
         body: JSON.stringify({
             filename: currentFilename,
             fps: fps,
-            vision_model: visionModel
+            smooth: smooth
         })
     })
     .then(response => response.json())
@@ -758,81 +699,6 @@ function pollAIProgress(taskId) {
 }
 
 // ============================================================
-// Vision model download progress polling
-// ============================================================
-
-function pollModelDownloads() {
-    fetch('/ai/models/download-status')
-        .then(r => r.json())
-        .then(data => {
-            let anyActive = false;
-
-            Object.entries(data.status).forEach(([key, info]) => {
-                const card = document.querySelector(`.model-option[data-model="${key}"]`);
-                if (!card) return;
-
-                const progressWrap = card.querySelector('.model-dl-progress');
-                const bar          = card.querySelector('.model-dl-bar');
-                const msg          = card.querySelector('.model-dl-msg');
-                const badge        = card.querySelector('.model-dl-badge');
-                const sub          = card.querySelector('.model-dl-sub');
-
-                if (info.status === 'queued' || info.status === 'downloading') {
-                    anyActive = true;
-
-                    // Show progress bar
-                    if (progressWrap) progressWrap.style.display = '';
-                    if (bar) bar.style.width = (info.percent || 0) + '%';
-                    if (msg) msg.textContent = info.message || '';
-
-                    // Update badge
-                    if (badge) {
-                        badge.textContent = info.status === 'queued' ? 'Queued…' : `${info.percent || 0}%`;
-                        badge.className = 'badge bg-warning text-dark model-dl-badge';
-                        badge.style.fontSize = '0.6rem';
-                    }
-
-                    // Disable radio while downloading so user can't select a mid-download model
-                    const radio = card.querySelector('input[type="radio"]');
-                    if (radio) radio.disabled = true;
-
-                } else if (info.status === 'done') {
-                    // Hide progress bar, mark downloaded
-                    if (progressWrap) progressWrap.style.display = 'none';
-                    if (badge) {
-                        badge.textContent = 'Downloaded';
-                        badge.className = 'badge bg-success model-dl-badge';
-                        badge.style.fontSize = '0.6rem';
-                    }
-                    if (sub && sub.dataset.noted) {
-                        // Remove the "will download on first use" note
-                        sub.textContent = sub.textContent.replace(' · will download on first use', '');
-                        delete sub.dataset.noted;
-                    }
-                    const radio = card.querySelector('input[type="radio"]');
-                    if (radio) radio.disabled = false;
-
-                } else if (info.status === 'error') {
-                    if (progressWrap) progressWrap.style.display = 'none';
-                    if (badge) {
-                        badge.textContent = 'Download failed';
-                        badge.className = 'badge bg-danger model-dl-badge';
-                        badge.style.fontSize = '0.6rem';
-                    }
-                    if (msg) { msg.textContent = info.message || 'Download failed'; msg.className = 'model-dl-msg text-danger mt-1'; msg.style.fontSize = '0.6rem'; msg.style.display = ''; }
-                    const radio = card.querySelector('input[type="radio"]');
-                    if (radio) radio.disabled = false;
-                }
-            });
-
-            // Keep polling while downloads are active; back off to 3s to reduce load
-            if (anyActive) setTimeout(pollModelDownloads, 3000);
-        })
-        .catch(() => {
-            // Server not yet ready — retry in 5s
-            setTimeout(pollModelDownloads, 5000);
-        });
-}
 
 function resetAIGenerateBtn() {
     const btn = document.getElementById('ai-generate-btn');
@@ -865,12 +731,14 @@ function updateAIStep(step, percentage, message) {
     if (stepText) {
         // Show current step name
         const stepNames = {
+            'pending_frames': 'Extracting Frames',
             'extracting_frames': 'Extracting Frames',
-            'analyzing_frames': 'AI Analyzing Frames',
-            'generating_story': 'Generating Story',
-            'detecting_moments': 'Detecting Moments',
-            'generating_shorts': 'Creating Short Videos',
-            'generating_metadata': 'Generating Metadata'
+            'awaiting_agent': 'AI Agent Analyzing Gameplay',
+            'analyzing_frames': 'AI Agent Analyzing Gameplay',
+            'plan_ready': 'Planning Hooked Shorts',
+            'rendering': 'Rendering Short Videos',
+            'generating_shorts': 'Rendering Short Videos',
+            'generating_metadata': 'Finalizing Metadata'
         };
         stepText.innerText = stepNames[step] || step;
     }
@@ -892,10 +760,12 @@ function highlightPipelineStep(step) {
 
     // Highlight current step
     const stepMap = {
+        'pending_frames': 'step-extract',
         'extracting_frames': 'step-extract',
+        'awaiting_agent': 'step-analyze',
         'analyzing_frames': 'step-analyze',
-        'generating_story': 'step-story',
-        'detecting_moments': 'step-story',
+        'plan_ready': 'step-story',
+        'rendering': 'step-shorts',
         'generating_shorts': 'step-shorts',
         'generating_metadata': 'step-metadata'
     };
@@ -939,7 +809,9 @@ function showAIResultsFromAPI(apiData) {
             metadata: {
                 title: s.title,
                 description: s.description,
-                tags: s.tags
+                tags: s.tags,
+                tags_csv: s.tags_csv,
+                metadata_url: s.metadata_url
             }
         }));
 
@@ -1046,11 +918,23 @@ function showShortDetails(short) {
     const descEl = document.getElementById('modal-description');
     if (descEl) descEl.textContent = metadata.description || '—';
 
-    // Tags
+    // Tags — rendered as comma-separated hashtag chips; tags already include '#'.
     const tagsEl = document.getElementById('modal-tags');
+    const tagsList = (metadata.tags || []).map(t => (t || '').toString().trim())
+        .map(t => t.startsWith('#') ? t : '#' + t.replace(/^#+/, ''));
+    const tagsCsv = metadata.tags_csv || tagsList.join(', ');
     if (tagsEl) {
-        const tags = metadata.tags || [];
-        tagsEl.innerHTML = tags.map(t => `<span class="badge bg-dark rounded-pill me-1 mb-1">#${t}</span>`).join('');
+        tagsEl.dataset.copy = tagsCsv; // what "Copy Tags" copies (comma + hashtags)
+        tagsEl.innerHTML = tagsList
+            .map(t => `<span class="badge bg-dark rounded-pill me-1 mb-1">${t}</span>`).join('');
+    }
+
+    // Stash the full metadata block for the "Copy all" button.
+    const modalRoot = document.getElementById('shortDetailModal');
+    if (modalRoot) {
+        modalRoot.dataset.copyAll =
+            `${metadata.title || ''}\n\n${metadata.description || ''}\n\n${tagsCsv}`;
+        modalRoot.dataset.metadataUrl = metadata.metadata_url || '';
     }
 
     // Timestamp
@@ -1097,7 +981,26 @@ function toggleStoryView() {
 function copyToClipboard(elementId) {
     const el = document.getElementById(elementId);
     if (!el) return;
-    navigator.clipboard.writeText(el.textContent.trim()).catch(() => {});
+    // Prefer an explicit copy string (e.g. comma-separated hashtags) over the
+    // rendered text (which would glue badges together without separators).
+    const text = (el.dataset && el.dataset.copy) ? el.dataset.copy : el.textContent.trim();
+    navigator.clipboard.writeText(text).then(() => _flashCopied(event)).catch(() => {});
+}
+
+function copyAllMetadata() {
+    const modalRoot = document.getElementById('shortDetailModal');
+    const text = modalRoot && modalRoot.dataset ? (modalRoot.dataset.copyAll || '') : '';
+    if (text) navigator.clipboard.writeText(text).then(() => _flashCopied(event)).catch(() => {});
+}
+
+function _flashCopied(evt) {
+    try {
+        const btn = evt && evt.currentTarget;
+        if (!btn) return;
+        const orig = btn.innerHTML;
+        btn.innerHTML = '<i class="bi bi-check2 me-1"></i> Copied!';
+        setTimeout(() => { btn.innerHTML = orig; }, 1500);
+    } catch (e) { /* no-op */ }
 }
 
 // ============================================================
@@ -1126,8 +1029,7 @@ async function checkForExistingTasks() {
             const cp = _checkpointLabel(data.last_checkpoint);
             showTaskBanner(filename, taskId, 'error',
                 `Previous run for <strong>${filename}</strong> failed — progress saved up to: <strong>${cp}</strong>. Resume to reuse already-generated frames?`);
-        } else if (['queued', 'extracting_frames', 'analyzing_frames',
-                     'generating_story', 'generating_shorts', 'generating_metadata'].includes(status)) {
+        } else if (['queued', 'pending_frames', 'awaiting_agent', 'plan_ready', 'rendering'].includes(status)) {
             // Still running (e.g. tab was closed and reopened) — reattach
             showTaskBanner(filename, taskId, 'running',
                 `AI processing for <strong>${filename}</strong> is in progress (${data.percentage || 0}%). Reconnect?`);

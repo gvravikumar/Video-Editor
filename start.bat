@@ -29,30 +29,8 @@ if not exist "venv\Scripts\activate.bat" (
 )
 
 echo.
-echo Windows detected - PyTorch with CPU support will be used.
-echo (CUDA will be auto-detected if NVIDIA GPU is available)
-
-REM Check if AI models are downloaded
-echo.
-echo Checking AI models...
-if not exist "models\blip-captioning-base\config.json" (
-    echo WARNING: AI models not found locally.
-    echo.
-    echo To enable offline operation, please download models first:
-    echo     python download_models.py
-    echo.
-    echo Models will be automatically downloaded on first use (requires internet^).
-    echo Total download size: ~3.2 GB
-    echo.
-    set /p CONTINUE="Continue anyway? (Y/N): "
-    if /i not "%CONTINUE%"=="Y" (
-        echo Cancelled. Please run: python download_models.py
-        pause
-        exit /b 1
-    )
-) else (
-    echo OK - AI models found locally (offline mode ready^)
-)
+echo AI engine: agent-in-the-loop (Copilot) - no local models to download.
+echo Make sure FFmpeg is installed and on PATH.
 
 echo.
 echo Starting the Flask server...

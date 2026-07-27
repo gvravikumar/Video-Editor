@@ -26,6 +26,9 @@ processed/
 frames/
 shorts/
 stories/
+jobs/
+state/
+analysis_frames/
 
 # AI Models (large files - download on first run)
 models/

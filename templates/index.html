@@ -223,57 +223,25 @@
                                 </div>
                             </div>
 
-                            <!-- Vision Model Selector -->
-                            <div class="mb-3">
-                                <label class="form-label text-muted small mb-2">Vision Model</label>
-                                <div class="d-flex flex-column gap-2" id="model-selector">
-
-                                    <label class="d-flex align-items-center p-2 rounded border model-option" data-model="blip-base" style="cursor:pointer; border-color: var(--bs-primary) !important; background: rgba(13,110,253,0.08);">
-                                        <input type="radio" name="vision-model" value="blip-base" class="me-2" checked>
-                                        <div class="flex-grow-1">
-                                            <div class="d-flex align-items-center gap-1">
-                                                <span class="text-white small fw-medium">BLIP Base</span>
-                                                <span class="badge bg-success" style="font-size:0.6rem">Downloaded</span>
-                                            </div>
-                                            <div class="text-muted" style="font-size:0.65rem">~1 GB &nbsp;·&nbsp; Fast &nbsp;·&nbsp; Good accuracy</div>
-                                            <div class="model-dl-progress mt-1" style="display:none">
-                                                <div class="progress" style="height:3px"><div class="progress-bar progress-bar-striped progress-bar-animated bg-info model-dl-bar" style="width:0%"></div></div>
-                                                <div class="model-dl-msg text-info mt-1" style="font-size:0.6rem"></div>
-                                            </div>
-                                        </div>
-                                    </label>
-
-                                    <label class="d-flex align-items-center p-2 rounded border border-secondary border-opacity-25 model-option" data-model="blip-large" style="cursor:pointer; background: rgba(255,255,255,0.03);">
-                                        <input type="radio" name="vision-model" value="blip-large" class="me-2">
-                                        <div class="flex-grow-1">
-                                            <div class="d-flex align-items-center gap-1">
-                                                <span class="text-white small fw-medium">BLIP Large</span>
-                                                <span class="badge bg-info text-dark model-dl-badge" style="font-size:0.6rem">Better</span>
-                                            </div>
-                                            <div class="text-muted model-dl-sub" style="font-size:0.65rem">~1.5 GB &nbsp;·&nbsp; Medium &nbsp;·&nbsp; Better accuracy</div>
-                                            <div class="model-dl-progress mt-1" style="display:none">
-                                                <div class="progress" style="height:3px"><div class="progress-bar progress-bar-striped progress-bar-animated bg-info model-dl-bar" style="width:0%"></div></div>
-                                                <div class="model-dl-msg text-info mt-1" style="font-size:0.6rem"></div>
-                                            </div>
-                                        </div>
-                                    </label>
-
-                                    <label class="d-flex align-items-center p-2 rounded border border-secondary border-opacity-25 model-option" data-model="blip2" style="cursor:pointer; background: rgba(255,255,255,0.03);">
-                                        <input type="radio" name="vision-model" value="blip2" class="me-2">
-                                        <div class="flex-grow-1">
-                                            <div class="d-flex align-items-center gap-1">
-                                                <span class="text-white small fw-medium">BLIP-2</span>
-                                                <span class="badge bg-warning text-dark model-dl-badge" style="font-size:0.6rem">Best</span>
-                                            </div>
-                                            <div class="text-muted model-dl-sub" style="font-size:0.65rem">~5.5 GB &nbsp;·&nbsp; Slow &nbsp;·&nbsp; Best accuracy &nbsp;·&nbsp; downloads on first use</div>
-                                            <div class="model-dl-progress mt-1" style="display:none">
-                                                <div class="progress" style="height:3px"><div class="progress-bar progress-bar-striped progress-bar-animated bg-info model-dl-bar" style="width:0%"></div></div>
-                                                <div class="model-dl-msg text-info mt-1" style="font-size:0.6rem"></div>
-                                            </div>
-                                        </div>
-                                    </label>
-
+                            <!-- AI engine note -->
+                            <div class="mb-3 p-2 rounded border border-secondary border-opacity-25" style="background: rgba(13,110,253,0.06);">
+                                <div class="d-flex align-items-center gap-2">
+                                    <i class="bi bi-robot text-primary"></i>
+                                    <span class="text-white small fw-medium">Analyzed by the Copilot AI agent</span>
                                 </div>
+                                <div class="text-muted mt-1" style="font-size:0.65rem">No local models or downloads — the AI agent watches your gameplay and hand-picks the most hook-worthy moments.</div>
+                            </div>
+
+
+                            <!-- Smooth footage toggle -->
+                            <div class="mb-3">
+                                <label class="d-flex align-items-center justify-content-between p-2 rounded border border-secondary border-opacity-25" style="cursor:pointer; background: rgba(255,255,255,0.03);">
+                                    <span class="flex-grow-1">
+                                        <span class="text-white small fw-medium"><i class="bi bi-magic me-1 text-primary"></i>Smooth choppy footage <span class="badge bg-warning text-dark" style="font-size:0.55rem">SLOW</span></span>
+                                        <span class="d-block text-muted" style="font-size:0.65rem">Motion-interpolate low-FPS captures up to 60 FPS. Only helps footage recorded below ~48 FPS; adds significant render time. Leave off if your capture is already 60 FPS.</span>
+                                    </span>
+                                    <input type="checkbox" id="ai-smooth-toggle" class="form-check-input ms-2">
+                                </label>
                             </div>
 
                             <div class="mb-3 p-2 bg-dark rounded small">
@@ -415,16 +383,16 @@
                                 <div class="small text-muted mt-1">Extract</div>
                             </div>
                             <div class="pipeline-step text-center" id="step-analyze">
-                                <i class="bi bi-eye fs-5 text-muted"></i>
-                                <div class="small text-muted mt-1">Analyze</div>
+                                <i class="bi bi-robot fs-5 text-muted"></i>
+                                <div class="small text-muted mt-1">AI Agent</div>
                             </div>
                             <div class="pipeline-step text-center" id="step-story">
                                 <i class="bi bi-journal-text fs-5 text-muted"></i>
-                                <div class="small text-muted mt-1">Story</div>
+                                <div class="small text-muted mt-1">Plan</div>
                             </div>
                             <div class="pipeline-step text-center" id="step-shorts">
                                 <i class="bi bi-phone fs-5 text-muted"></i>
-                                <div class="small text-muted mt-1">Shorts</div>
+                                <div class="small text-muted mt-1">Render</div>
                             </div>
                             <div class="pipeline-step text-center" id="step-metadata">
                                 <i class="bi bi-tags fs-5 text-muted"></i>
@@ -522,7 +490,10 @@
                                     </span>
                                 </div>
 
-                                <h4 class="text-white fw-bold mb-3" id="modal-short-title">Short Title</h4>
+                                <h4 class="text-white fw-bold mb-1" id="modal-short-title">Short Title</h4>
+                                <button class="btn btn-sm btn-outline-secondary mb-3 rounded-pill" onclick="copyToClipboard('modal-short-title')">
+                                    <i class="bi bi-clipboard me-1"></i> Copy Title
+                                </button>
 
                                 <div class="mb-3">
                                     <label class="form-label text-muted small text-uppercase fw-semibold">Description</label>
@@ -541,6 +512,9 @@
                                     </div>
                                     <button class="btn btn-sm btn-outline-secondary mt-2 rounded-pill" onclick="copyToClipboard('modal-tags')">
                                         <i class="bi bi-clipboard me-1"></i> Copy Tags
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-primary mt-2 rounded-pill" onclick="copyAllMetadata()">
+                                        <i class="bi bi-clipboard-check me-1"></i> Copy Title + Description + Tags
                                     </button>
                                 </div>
 
@@ -615,7 +589,7 @@
                         </div>
                         <div class="alert alert-warning bg-warning bg-opacity-10 border-warning border-opacity-25 rounded-3 mt-3 mb-0 py-2 px-3 small">
                             <i class="bi bi-info-circle me-1"></i>
-                            Your <strong>uploaded videos</strong> and <strong>AI models</strong> will <em>not</em> be affected.
+                            Your <strong>uploaded videos</strong> will <em>not</em> be affected.
                             Task history will also be cleared.
                         </div>
                     </div>
