@@ -130,6 +130,8 @@ def gallery_data():
                 (t if str(t).startswith('#') else '#' + str(t)) for t in tags
             )
             shorts.append({
+                'index': s.get('index', 0),
+                'job_id': job.get('job_id'),
                 'title': meta.get('title', 'Untitled'),
                 'description': meta.get('description', ''),
                 'tags': tags,
@@ -142,6 +144,7 @@ def gallery_data():
                 'video_url': s.get('web_video_path', ''),
                 'thumbnail_url': s.get('web_thumbnail_path', ''),
                 'metadata_url': s.get('web_metadata_path', ''),
+                'youtube': s.get('youtube'),  # {video_id, url, privacy, uploaded_at} or None
             })
         if not shorts:
             continue
@@ -163,6 +166,131 @@ def gallery_data():
         'short_count': total_shorts,
         'videos': videos,
     })
+
+
+# ============================================================
+# ROUTES - YouTube upload
+# ============================================================
+
+@app.route('/youtube/status', methods=['GET'])
+def youtube_status():
+    """Report the YouTube integration state (deps/config/connection)."""
+    from services import youtube_uploader
+    return jsonify(youtube_uploader.status())
+
+
+@app.route('/youtube/connect', methods=['POST'])
+def youtube_connect():
+    """
+    Run the Google sign-in (OAuth) flow. Blocking; opens a browser on the server
+    host (localhost). Stores the token securely (never returned to the client).
+    """
+    from services import youtube_uploader
+    try:
+        st = youtube_uploader.connect(open_browser=True)
+        return jsonify({'status': 'success', 'youtube': st})
+    except Exception as e:
+        logger.error("YouTube connect failed: %s", e)
+        return jsonify({'error': str(e)}), 400
+
+
+@app.route('/youtube/disconnect', methods=['POST'])
+def youtube_disconnect():
+    from services import youtube_uploader
+    try:
+        youtube_uploader.disconnect()
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@app.route('/youtube/upload', methods=['POST'])
+def youtube_upload():
+    """
+    Upload one generated short to YouTube. Body: {job_id, index, privacy?}.
+    Idempotent: if the short was already uploaded, returns the existing link
+    instead of uploading again.
+    """
+    from services import youtube_uploader
+    data = request.json or {}
+    job_id = data.get('job_id')
+    index = data.get('index')
+    privacy = data.get('privacy', youtube_uploader.DEFAULT_PRIVACY)
+    if job_id is None or index is None:
+        return jsonify({'error': 'job_id and index are required'}), 400
+    try:
+        index = int(index)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'index must be an integer'}), 400
+
+    jq = get_job_queue()
+
+    # Duplicate guard — never upload the same short twice.
+    existing = jq.get_short_youtube(job_id, index)
+    if existing and existing.get('video_id'):
+        return jsonify({'status': 'already_uploaded', 'youtube': existing})
+
+    job = jq.get_job(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    short = next((s for s in job.get('result', {}).get('shorts', [])
+                  if s.get('index') == index), None)
+    if not short or not short.get('output_path'):
+        return jsonify({'error': 'Short not found'}), 404
+
+    meta = short.get('metadata', {})
+    try:
+        yt = youtube_uploader.upload(
+            video_path=short['output_path'],
+            title=meta.get('title', 'Gameplay Short'),
+            description=meta.get('description', ''),
+            tags=meta.get('tags', []),
+            privacy=privacy,
+        )
+    except Exception as e:
+        logger.error("YouTube upload failed for %s#%s: %s", job_id, index, e)
+        return jsonify({'error': str(e)}), 400
+
+    jq.set_short_youtube(job_id, index, yt)
+    return jsonify({'status': 'success', 'youtube': yt})
+
+
+@app.route('/youtube/archive', methods=['GET'])
+def youtube_archive():
+    """
+    List every short that has been uploaded to YouTube (for the Archive tab),
+    newest upload first, with a YouTube-style thumbnail + local fallback.
+    """
+    jq = get_job_queue()
+    items = []
+    for job in jq.list_jobs(statuses=[STATUS_COMPLETED]):
+        result = job.get('result', {})
+        for s in result.get('shorts', []):
+            yt = s.get('youtube')
+            if not yt or not yt.get('video_id'):
+                continue
+            meta = s.get('metadata', {})
+            vid = yt['video_id']
+            items.append({
+                'job_id': job.get('job_id'),
+                'index': s.get('index', 0),
+                'game': result.get('game', ''),
+                'title': meta.get('title', 'Untitled'),
+                'description': meta.get('description', ''),
+                'tags_csv': meta.get('tags_csv', ''),
+                'category': s.get('moment', {}).get('category', 'INTENSE'),
+                'duration': s.get('duration', 0),
+                'video_url': s.get('web_video_path', ''),
+                'local_thumbnail': s.get('web_thumbnail_path', ''),
+                'youtube_url': yt.get('url', f'https://www.youtube.com/watch?v={vid}'),
+                'youtube_thumbnail': f'https://img.youtube.com/vi/{vid}/hqdefault.jpg',
+                'video_id': vid,
+                'privacy': yt.get('privacy', ''),
+                'uploaded_at': yt.get('uploaded_at', ''),
+            })
+    items.sort(key=lambda x: x.get('uploaded_at', ''), reverse=True)
+    return jsonify({'count': len(items), 'items': items})
 
 
 # ============================================================

@@ -203,9 +203,51 @@ Outputs per job dir (`shorts/<job_id>/`): `short_NNN_<category>.mp4`,
 ## 8. Results UI
 
 - Main app: `http://127.0.0.1:8000/` (upload + generate + per-video results).
-- **Gallery:** `http://127.0.0.1:8000/gallery` — every generated short with
-  thumbnail, title, description, hashtag chips, hover-preview, and copy/download.
-  Backed by `GET /gallery/data` (aggregates all completed jobs).
+- **Gallery:** `http://127.0.0.1:8000/gallery` — two tabs:
+  - **Generated** — every generated short with thumbnail, title, description,
+    hashtag chips, hover-preview, copy/download, and an **Upload to YouTube** button.
+    Backed by `GET /gallery/data`.
+  - **Uploaded** — the archive of shorts already published to YouTube, each with a
+    YouTube-style thumbnail + watch link. Backed by `GET /youtube/archive`.
+
+---
+
+## 8b. Direct YouTube upload (YouTube Data API v3)
+
+Shorts can be published straight to YouTube from the gallery. There is **no
+separate Shorts API** — a vertical (9:16) video ≤ 3 min is auto-treated as a Short,
+which our clips satisfy.
+
+**One-time setup (per machine/account):**
+1. [Google Cloud Console](https://console.cloud.google.com/) → new project.
+2. Enable **YouTube Data API v3** (APIs & Services → Library).
+3. Configure the **OAuth consent screen** (External) and add yourself as a **Test user**.
+4. Create an **OAuth client ID** of type **Desktop app**; download the JSON.
+5. Save it as **`youtube_client_secret.json`** in the project root (gitignored).
+6. `pip install -r requirements.txt` (installs the google-* + crypto libs).
+7. In the gallery, click **Connect YouTube** → sign in with Google.
+
+**Security:** the OAuth token is stored via `services/secure_store.py` — the OS
+keychain when available, otherwise a `Fernet`-encrypted file whose key is itself
+kept in the keychain (or a `0600` key file as a last resort). Tokens are never
+logged and never committed. `youtube_client_secret.json` and `state/secrets/` are
+gitignored.
+
+**Behavior:**
+- Default privacy is **private** (unverified OAuth apps can only upload as private
+  until Google verifies them; flip to public/unlisted in YouTube Studio or after
+  verification). The UI offers private/unlisted/public.
+- Uploads are **idempotent**: each short's `{video_id, url, privacy, uploaded_at}`
+  is saved in `job.json`; re-clicking returns the existing link (never double-uploads).
+- **Quota:** `videos.insert` costs ~1600 units; the default 10,000/day ≈ 6 uploads/day.
+  Request a quota increase for bulk publishing.
+
+**Endpoints:** `GET /youtube/status`, `POST /youtube/connect`,
+`POST /youtube/disconnect`, `POST /youtube/upload {job_id,index,privacy}`,
+`GET /youtube/archive`.
+
+The app is **fail-safe**: with the libraries or client secret missing, everything
+still runs and the UI shows exact setup guidance.
 
 ---
 
@@ -231,9 +273,11 @@ Outputs per job dir (`shorts/<job_id>/`): `short_NNN_<category>.mp4`,
 | `services/contact_sheet.py` | frames → labeled montage sheets (your triage aid) |
 | `services/plan_schema.py` | validates/normalizes your plan (enforces YT limits) |
 | `services/renderer.py` | plan → 9:16 hook-first shorts + thumbnails + **metadata at save** |
-| `services/job_queue.py` | job lifecycle + agent handoff contract |
+| `services/job_queue.py` | job lifecycle + agent handoff + per-short YouTube result |
+| `services/youtube_uploader.py` | YouTube Data API v3 upload (OAuth, resumable) |
+| `services/secure_store.py` | encrypted secret storage (keychain / Fernet file) |
 | `.github/skills/gameplay-shorts/SKILL.md` | the skill wrapper (same rules) |
-| `templates/gallery.html` | the results gallery page |
+| `templates/gallery.html` | results gallery: Generated + Uploaded tabs, YouTube upload |
 
 ---
 

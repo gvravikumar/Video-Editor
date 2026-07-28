@@ -5,3 +5,12 @@ proglog==0.1.10
 opencv-python==4.10.0.84
 Pillow==10.4.0
 send2trash>=1.8.0
+
+# Optional — direct YouTube upload (YouTube Data API v3).
+# The app runs fine without these; the "Upload to YouTube" button will show
+# setup guidance until they're installed and an OAuth client is configured.
+google-api-python-client>=2.100.0
+google-auth-oauthlib>=1.2.0
+google-auth-httplib2>=0.2.0
+cryptography>=42.0.0
+keyring>=25.0.0

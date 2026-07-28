@@ -45,3 +45,9 @@ build/
 .cache/
 *.bin
 *.safetensors
+
+# YouTube OAuth — NEVER commit credentials or tokens
+youtube_client_secret.json
+client_secret*.json
+token.json
+state/secrets/

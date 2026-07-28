@@ -134,6 +134,35 @@ class JobQueue:
         with self._lock:
             return self._read_json(self._job_file(job_id))
 
+    def set_short_youtube(self, job_id: str, index: int, yt: Dict[str, Any]) -> bool:
+        """
+        Persist a YouTube upload result onto a specific short (by its 'index')
+        inside the job's result. Used to show the watch link and prevent
+        duplicate uploads. Returns True if the short was found and updated.
+        """
+        with self._lock:
+            job = self._read_json(self._job_file(job_id))
+            if not job:
+                return False
+            shorts = job.get("result", {}).get("shorts", [])
+            for s in shorts:
+                if s.get("index") == index:
+                    s["youtube"] = yt
+                    job["updated_at"] = _utcnow()
+                    self._atomic_write(self._job_file(job_id), job)
+                    return True
+            return False
+
+    def get_short_youtube(self, job_id: str, index: int) -> Optional[Dict[str, Any]]:
+        """Return the saved YouTube result for a short, or None."""
+        job = self.get_job(job_id)
+        if not job:
+            return None
+        for s in job.get("result", {}).get("shorts", []):
+            if s.get("index") == index:
+                return s.get("youtube")
+        return None
+
     def list_jobs(self, statuses: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """List all jobs, optionally filtered by status. Newest first."""
         jobs: List[Dict[str, Any]] = []

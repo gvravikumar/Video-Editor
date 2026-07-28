@@ -97,6 +97,16 @@
         }
         .card-actions { display:flex; gap:.4rem; margin-top:auto; }
         .card-actions .btn { font-size: .72rem; padding: .3rem .5rem; }
+        .nav-tabs .nav-link {
+            color:#9aa2b4; background:transparent; border:0; border-bottom:2px solid transparent;
+            border-radius:0; padding:.5rem .9rem; font-size:.9rem;
+        }
+        .nav-tabs .nav-link.active { color:#fff; background:transparent; border-bottom:2px solid var(--accent); }
+        .yt-badge {
+            position:absolute; bottom:10px; left:10px;
+            background:#c4302b; color:#fff; border-radius:6px;
+            padding:.1rem .45rem; font-size:.66rem; font-weight:700;
+        }
         .cat-WINNING{background:#1c7a3f!important;color:#fff}
         .cat-CLUTCH{background:#0f9d58!important;color:#fff}
         .cat-LOSING{background:#8a2b2b!important;color:#fff}
@@ -114,27 +124,47 @@
 </head>
 <body>
     <nav class="navbar navbar-glass sticky-top">
-        <div class="container-fluid px-4 py-2 d-flex align-items-center">
+        <div class="container-fluid px-4 py-2 d-flex align-items-center flex-wrap gap-2">
             <a href="/" class="navbar-brand d-flex align-items-center gap-2 text-white mb-0">
                 <i class="bi bi-stars text-primary"></i>
                 <span class="fw-bold">VideoStudio AI</span>
-                <span class="text-secondary fw-normal">· Generated Shorts</span>
+                <span class="text-secondary fw-normal">· Shorts</span>
             </a>
             <div class="ms-auto d-flex align-items-center gap-2">
                 <span class="stat-pill"><i class="bi bi-collection-play me-1 text-primary"></i><span id="stat-videos">0</span> videos</span>
                 <span class="stat-pill"><i class="bi bi-phone me-1 text-primary"></i><span id="stat-shorts">0</span> shorts</span>
-                <a href="/" class="btn btn-sm btn-outline-light rounded-pill"><i class="bi bi-arrow-left me-1"></i>Back to editor</a>
+                <span class="stat-pill"><i class="bi bi-youtube me-1 text-danger"></i><span id="stat-uploaded">0</span> uploaded</span>
+                <button id="yt-conn-btn" class="btn btn-sm btn-outline-danger rounded-pill" onclick="handleYouTubeButton()">
+                    <i class="bi bi-youtube me-1"></i><span id="yt-conn-label">YouTube</span>
+                </button>
+                <a href="/" class="btn btn-sm btn-outline-light rounded-pill"><i class="bi bi-arrow-left me-1"></i>Editor</a>
             </div>
+        </div>
+        <div class="container-fluid px-4">
+            <ul class="nav nav-tabs border-0" id="galleryTabs">
+                <li class="nav-item"><button class="nav-link active" data-tab="generated"><i class="bi bi-grid-3x3-gap me-1"></i>Generated</button></li>
+                <li class="nav-item"><button class="nav-link" data-tab="uploaded"><i class="bi bi-youtube me-1"></i>Uploaded <span class="badge bg-danger rounded-pill ms-1" id="tab-uploaded-count">0</span></button></li>
+            </ul>
         </div>
     </nav>
 
     <main class="container-fluid px-4 py-4">
-        <div id="gallery-root"></div>
-        <div id="empty" class="empty-state d-none">
-            <i class="bi bi-inbox fs-1 d-block mb-3"></i>
-            <h5>No generated shorts yet</h5>
-            <p>Upload a gameplay video and generate AI shorts — they'll show up here.</p>
-            <a href="/" class="btn btn-primary rounded-pill mt-2"><i class="bi bi-upload me-1"></i>Go generate some</a>
+        <div id="tab-generated">
+            <div id="gallery-root"></div>
+            <div id="empty" class="empty-state d-none">
+                <i class="bi bi-inbox fs-1 d-block mb-3"></i>
+                <h5>No generated shorts yet</h5>
+                <p>Upload a gameplay video and generate AI shorts — they'll show up here.</p>
+                <a href="/" class="btn btn-primary rounded-pill mt-2"><i class="bi bi-upload me-1"></i>Go generate some</a>
+            </div>
+        </div>
+        <div id="tab-uploaded" class="d-none">
+            <div id="archive-root" class="row g-3"></div>
+            <div id="archive-empty" class="empty-state d-none">
+                <i class="bi bi-youtube fs-1 d-block mb-3 text-danger"></i>
+                <h5>Nothing uploaded yet</h5>
+                <p>Use <strong>Upload to YouTube</strong> on any generated short — uploaded videos appear here with their watch link.</p>
+            </div>
         </div>
     </main>
 
@@ -168,8 +198,43 @@
                                 <button class="btn btn-sm btn-outline-primary rounded-pill" onclick="copyText(window._mAll, this)"><i class="bi bi-clipboard-check me-1"></i>Copy all</button>
                                 <a id="m-dl" href="#" download class="btn btn-sm btn-success rounded-pill"><i class="bi bi-download me-1"></i>Download</a>
                             </div>
+
+                            <hr class="border-secondary">
+                            <label class="text-uppercase small text-muted fw-semibold d-block mb-2"><i class="bi bi-youtube text-danger me-1"></i>YouTube</label>
+                            <div class="d-flex flex-wrap align-items-center gap-2">
+                                <select id="m-privacy" class="form-select form-select-sm rounded-pill" style="width:auto;background:var(--panel-2);border-color:var(--border);color:#e7e9ee">
+                                    <option value="private" selected>Private</option>
+                                    <option value="unlisted">Unlisted</option>
+                                    <option value="public">Public</option>
+                                </select>
+                                <button id="m-yt-btn" class="btn btn-sm btn-danger rounded-pill" onclick="uploadCurrent(this)">
+                                    <i class="bi bi-youtube me-1"></i>Upload to YouTube
+                                </button>
+                                <a id="m-yt-link" class="btn btn-sm btn-outline-danger rounded-pill d-none" target="_blank"><i class="bi bi-box-arrow-up-right me-1"></i>Watch on YouTube</a>
+                            </div>
+                            <div id="m-yt-note" class="small text-muted mt-2"></div>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- YouTube setup / connect modal -->
+    <div class="modal fade" id="ytSetupModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content" style="background: var(--panel); border:1px solid var(--border);">
+                <div class="modal-header border-secondary">
+                    <h5 class="modal-title text-white"><i class="bi bi-youtube text-danger me-2"></i>Connect YouTube</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="yt-setup-body" class="small text-secondary"></div>
+                </div>
+                <div class="modal-footer border-secondary">
+                    <button id="yt-connect-go" class="btn btn-danger rounded-pill d-none" onclick="doConnect(this)"><i class="bi bi-google me-1"></i>Sign in with Google</button>
+                    <button id="yt-disconnect-go" class="btn btn-outline-secondary rounded-pill d-none" onclick="doDisconnect(this)">Disconnect</button>
+                    <button class="btn btn-outline-light rounded-pill" data-bs-dismiss="modal">Close</button>
                 </div>
             </div>
         </div>
@@ -193,16 +258,41 @@
             navigator.clipboard.writeText(text || '').then(() => showToast('Copied to clipboard'));
         }
 
+        // ---------------- global state ----------------
+        window._yt = { available:false, configured:false, connected:false };
+        window._shorts = {};   // key `${job_id}:${index}` -> short object
+        window._current = null; // short currently open in modal
+
+        const skey = s => `${s.job_id}:${s.index}`;
+
+        async function refreshYouTubeStatus() {
+            try {
+                const st = await fetch('/youtube/status').then(r => r.json());
+                window._yt = st;
+                const label = document.getElementById('yt-conn-label');
+                const btn = document.getElementById('yt-conn-btn');
+                if (st.connected) {
+                    label.textContent = st.channel ? st.channel : 'Connected';
+                    btn.className = 'btn btn-sm btn-danger rounded-pill';
+                } else {
+                    label.textContent = 'Connect YouTube';
+                    btn.className = 'btn btn-sm btn-outline-danger rounded-pill';
+                }
+            } catch (e) { /* ignore */ }
+        }
+
         async function load() {
-            const res = await fetch('/gallery/data');
-            const data = await res.json();
+            await refreshYouTubeStatus();
+            const data = await fetch('/gallery/data').then(r => r.json());
             document.getElementById('stat-videos').textContent = data.video_count;
             document.getElementById('stat-shorts').textContent = data.short_count;
 
             const root = document.getElementById('gallery-root');
+            root.innerHTML = '';
             if (!data.videos.length) {
                 document.getElementById('empty').classList.remove('d-none');
-                return;
+            } else {
+                document.getElementById('empty').classList.add('d-none');
             }
 
             data.videos.forEach(v => {
@@ -221,17 +311,21 @@
 
                 const row = document.createElement('div');
                 row.className = 'row g-3';
-                v.shorts.forEach(s => row.appendChild(card(s)));
+                v.shorts.forEach(s => { window._shorts[skey(s)] = s; row.appendChild(card(s)); });
                 section.appendChild(row);
                 root.appendChild(section);
             });
+
+            loadArchive();
         }
 
         function card(s) {
             const col = document.createElement('div');
             col.className = 'col-6 col-sm-4 col-md-3 col-xl-2';
+            col.dataset.key = skey(s);
             const cat = (s.category || 'INTENSE').toUpperCase();
             const tags = (s.tags || []).map(hashTag);
+            const uploaded = s.youtube && s.youtube.video_id;
             col.innerHTML = `
                 <div class="short-card">
                     <div class="thumb-wrap" style="background-image:url('${esc(s.thumbnail_url)}')">
@@ -242,6 +336,7 @@
                         <span class="badge-vir"><i class="bi bi-fire"></i> ${s.virality_score}/10</span>
                         <span class="play-fab"><i class="bi bi-play-fill"></i></span>
                         <span class="badge-dur">${s.duration}s</span>
+                        <span class="yt-badge ${uploaded ? '' : 'd-none'}"><i class="bi bi-youtube me-1"></i>On YouTube</span>
                     </div>
                     <div class="short-body">
                         <h6 class="short-title">${esc(s.title)}</h6>
@@ -249,7 +344,7 @@
                         <div class="tag-chips">${tags.slice(0,6).map(t => `<span class="tag-chip">${esc(t)}</span>`).join('')}${tags.length>6?`<span class="tag-chip">+${tags.length-6}</span>`:''}</div>
                         <div class="card-actions">
                             <button class="btn btn-outline-light rounded-pill flex-fill view-btn"><i class="bi bi-arrows-fullscreen"></i></button>
-                            <button class="btn btn-outline-secondary rounded-pill flex-fill copy-btn"><i class="bi bi-clipboard-check"></i></button>
+                            <button class="btn ${uploaded ? 'btn-outline-danger' : 'btn-danger'} rounded-pill flex-fill yt-btn" title="${uploaded ? 'View on YouTube' : 'Upload to YouTube'}"><i class="bi bi-youtube"></i></button>
                             <a class="btn btn-success rounded-pill flex-fill" href="${esc(s.video_url)}" download><i class="bi bi-download"></i></a>
                         </div>
                     </div>
@@ -260,17 +355,37 @@
             wrap.addEventListener('mouseenter', () => { vid.play().catch(()=>{}); });
             wrap.addEventListener('mouseleave', () => { vid.pause(); vid.currentTime = 0; });
 
-            const tagsCsv = s.tags_csv || tags.join(', ');
-            const all = `${s.title}\n\n${s.description}\n\n${tagsCsv}`;
-            col.querySelector('.view-btn').addEventListener('click', () => openModal(s, tags, tagsCsv, all));
-            wrap.addEventListener('click', () => openModal(s, tags, tagsCsv, all));
-            col.querySelector('.copy-btn').addEventListener('click', () => copyText(all));
+            col.querySelector('.view-btn').addEventListener('click', () => openModal(s));
+            wrap.addEventListener('click', () => openModal(s));
+            col.querySelector('.yt-btn').addEventListener('click', (e) => {
+                e.stopPropagation();
+                const cur = window._shorts[skey(s)];
+                if (cur.youtube && cur.youtube.video_id) {
+                    window.open(cur.youtube.url, '_blank');
+                } else {
+                    openModal(cur);  // route through modal so user picks privacy / connects
+                }
+            });
             return col;
         }
 
-        function openModal(s, tags, tagsCsv, all) {
+        function updateCard(s) {
+            const col = document.querySelector(`[data-key="${skey(s)}"]`);
+            if (!col) return;
+            const uploaded = s.youtube && s.youtube.video_id;
+            col.querySelector('.yt-badge').classList.toggle('d-none', !uploaded);
+            const b = col.querySelector('.yt-btn');
+            b.className = `btn ${uploaded ? 'btn-outline-danger' : 'btn-danger'} rounded-pill flex-fill yt-btn`;
+        }
+
+        function tagsOf(s){ return (s.tags||[]).map(hashTag); }
+
+        function openModal(s) {
+            window._current = s;
+            const tags = tagsOf(s);
+            const tagsCsv = s.tags_csv || tags.join(', ');
+            const all = `${s.title}\n\n${s.description}\n\n${tagsCsv}`;
             const cat = (s.category || 'INTENSE').toUpperCase();
-            document.getElementById('m-video').querySelector('source')?.remove();
             const mv = document.getElementById('m-video');
             mv.innerHTML = `<source src="${s.video_url}" type="video/mp4">`;
             mv.load();
@@ -284,8 +399,182 @@
             document.getElementById('m-dl').href = s.video_url;
             window._mTagsCsv = tagsCsv;
             window._mAll = all;
+            renderModalYouTube(s);
             bootstrap.Modal.getOrCreateInstance(document.getElementById('shortModal')).show();
         }
+
+        function renderModalYouTube(s) {
+            const btn = document.getElementById('m-yt-btn');
+            const link = document.getElementById('m-yt-link');
+            const note = document.getElementById('m-yt-note');
+            const sel = document.getElementById('m-privacy');
+            const uploaded = s.youtube && s.youtube.video_id;
+
+            if (uploaded) {
+                btn.classList.add('d-none'); sel.classList.add('d-none');
+                link.classList.remove('d-none'); link.href = s.youtube.url;
+                note.innerHTML = `Uploaded (${esc(s.youtube.privacy||'')}). Won't upload again.`;
+                return;
+            }
+            link.classList.add('d-none');
+            btn.classList.remove('d-none'); sel.classList.remove('d-none');
+            btn.disabled = false;
+            if (!window._yt.available) {
+                btn.innerHTML = '<i class="bi bi-gear me-1"></i>Set up YouTube';
+                btn.onclick = openSetup; note.textContent = 'YouTube libraries not installed.';
+            } else if (!window._yt.configured) {
+                btn.innerHTML = '<i class="bi bi-gear me-1"></i>Set up YouTube';
+                btn.onclick = openSetup; note.textContent = 'OAuth client secret not found — one-time setup needed.';
+            } else if (!window._yt.connected) {
+                btn.innerHTML = '<i class="bi bi-google me-1"></i>Connect Google';
+                btn.onclick = openSetup; note.textContent = 'Sign in with Google to enable uploads.';
+            } else {
+                btn.innerHTML = '<i class="bi bi-youtube me-1"></i>Upload to YouTube';
+                btn.onclick = () => uploadCurrent(btn);
+                note.innerHTML = `Uploading to <strong>${esc(window._yt.channel||'your channel')}</strong>.`;
+            }
+        }
+
+        async function uploadCurrent(btn) {
+            const s = window._current;
+            if (!s) return;
+            const privacy = document.getElementById('m-privacy').value;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Uploading…';
+            document.getElementById('m-yt-note').textContent = 'Uploading to YouTube — this can take a moment.';
+            try {
+                const res = await fetch('/youtube/upload', {
+                    method:'POST', headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({ job_id: s.job_id, index: s.index, privacy })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Upload failed');
+                s.youtube = data.youtube;
+                window._shorts[skey(s)] = s;
+                updateCard(s);
+                renderModalYouTube(s);
+                showToast('Uploaded to YouTube!');
+                loadArchive();
+            } catch (e) {
+                document.getElementById('m-yt-note').innerHTML = `<span class="text-danger">${esc(e.message)}</span>`;
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-youtube me-1"></i>Upload to YouTube';
+            }
+        }
+
+        // ---------------- YouTube connect / setup ----------------
+        function handleYouTubeButton() { openSetup(); }
+
+        function openSetup() {
+            const st = window._yt;
+            const body = document.getElementById('yt-setup-body');
+            const goBtn = document.getElementById('yt-connect-go');
+            const disBtn = document.getElementById('yt-disconnect-go');
+            goBtn.classList.add('d-none'); disBtn.classList.add('d-none');
+
+            if (st.connected) {
+                body.innerHTML = `<p>Connected to <strong>${esc(st.channel||'your channel')}</strong>.</p>
+                    <p class="text-muted">Token is stored securely via the ${esc(st.token_backend||'secure store')}.</p>`;
+                disBtn.classList.remove('d-none');
+            } else if (!st.available) {
+                body.innerHTML = `<p>${esc(st.message)}</p>
+                    <p>Install the libraries, then restart the app:</p>
+                    <pre class="bg-black p-2 rounded small">${esc(st.fix||'')}</pre>`;
+            } else if (!st.configured) {
+                body.innerHTML = `
+                    <p>One-time setup to enable uploads from your own YouTube account:</p>
+                    <ol class="ps-3">
+                        <li>Open <a href="https://console.cloud.google.com/" target="_blank" class="link-info">Google Cloud Console</a> and create a project.</li>
+                        <li>Enable <strong>YouTube Data API v3</strong> (APIs &amp; Services → Library).</li>
+                        <li>Configure the <strong>OAuth consent screen</strong> (External) and add yourself as a <em>Test user</em>.</li>
+                        <li>Create an <strong>OAuth client ID</strong> of type <strong>Desktop app</strong> and download the JSON.</li>
+                        <li>Save it as <code>youtube_client_secret.json</code> in the project root.</li>
+                    </ol>
+                    <p class="text-muted small">Then reopen this dialog and click “Sign in with Google”. Your login token is stored encrypted (${esc(st.token_backend||'OS keychain / encrypted file')}) — never in the project.</p>`;
+                goBtn.classList.remove('d-none');
+            } else {
+                body.innerHTML = `<p>Sign in with Google to connect your YouTube channel. A browser window will open for consent.</p>
+                    <p class="text-muted small">Your token is stored securely via the ${esc(st.token_backend||'secure store')} and never leaves this machine.</p>`;
+                goBtn.classList.remove('d-none');
+            }
+            bootstrap.Modal.getOrCreateInstance(document.getElementById('ytSetupModal')).show();
+        }
+
+        async function doConnect(btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Waiting for Google sign-in…';
+            try {
+                const res = await fetch('/youtube/connect', { method:'POST' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Connect failed');
+                await refreshYouTubeStatus();
+                showToast('Connected to YouTube');
+                bootstrap.Modal.getOrCreateInstance(document.getElementById('ytSetupModal')).hide();
+                if (window._current) renderModalYouTube(window._current);
+            } catch (e) {
+                document.getElementById('yt-setup-body').innerHTML +=
+                    `<p class="text-danger mt-2">${esc(e.message)}</p>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-google me-1"></i>Sign in with Google';
+            }
+        }
+
+        async function doDisconnect(btn) {
+            btn.disabled = true;
+            await fetch('/youtube/disconnect', { method:'POST' });
+            await refreshYouTubeStatus();
+            showToast('Disconnected');
+            bootstrap.Modal.getOrCreateInstance(document.getElementById('ytSetupModal')).hide();
+            btn.disabled = false;
+        }
+
+        // ---------------- Archive / Uploaded tab ----------------
+        async function loadArchive() {
+            const data = await fetch('/youtube/archive').then(r => r.json()).catch(() => ({count:0, items:[]}));
+            document.getElementById('stat-uploaded').textContent = data.count;
+            document.getElementById('tab-uploaded-count').textContent = data.count;
+            const root = document.getElementById('archive-root');
+            root.innerHTML = '';
+            document.getElementById('archive-empty').classList.toggle('d-none', data.count > 0);
+
+            data.items.forEach(it => {
+                const col = document.createElement('div');
+                col.className = 'col-6 col-sm-4 col-md-3 col-xl-2';
+                const cat = (it.category || 'INTENSE').toUpperCase();
+                col.innerHTML = `
+                    <div class="short-card">
+                        <a href="${esc(it.youtube_url)}" target="_blank" class="thumb-wrap d-block" style="aspect-ratio:16/9;background-image:url('${esc(it.youtube_thumbnail)}')">
+                            <img src="${esc(it.youtube_thumbnail)}" style="display:none" onerror="this.closest('.thumb-wrap').style.backgroundImage=\`url('${esc(it.local_thumbnail)}')\`">
+                            <span class="badge badge-cat rounded-pill cat-${cat}">${esc(cat)}</span>
+                            <span class="yt-badge"><i class="bi bi-youtube me-1"></i>${esc(it.privacy||'')}</span>
+                            <span class="play-fab"><i class="bi bi-play-fill"></i></span>
+                        </a>
+                        <div class="short-body">
+                            <h6 class="short-title">${esc(it.title)}</h6>
+                            <p class="short-desc">${esc((it.description||'').split('\n')[0])}</p>
+                            <div class="card-actions">
+                                <a class="btn btn-danger rounded-pill flex-fill" href="${esc(it.youtube_url)}" target="_blank"><i class="bi bi-youtube me-1"></i>Watch</a>
+                                <button class="btn btn-outline-secondary rounded-pill flex-fill" onclick="copyText('${esc(it.youtube_url)}')"><i class="bi bi-link-45deg"></i></button>
+                            </div>
+                        </div>
+                    </div>`;
+                // preload to trigger onerror fallback if the YT thumb 404s (private video)
+                col.querySelector('img').src = it.youtube_thumbnail;
+                root.appendChild(col);
+            });
+        }
+
+        // ---------------- Tabs ----------------
+        document.querySelectorAll('#galleryTabs .nav-link').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('#galleryTabs .nav-link').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                const tab = btn.dataset.tab;
+                document.getElementById('tab-generated').classList.toggle('d-none', tab !== 'generated');
+                document.getElementById('tab-uploaded').classList.toggle('d-none', tab !== 'uploaded');
+            });
+        });
 
         load().catch(err => {
             console.error(err);

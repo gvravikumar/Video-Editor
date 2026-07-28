@@ -157,11 +157,30 @@ Shorts are rendered for maximum smoothness and quality:
 - Agent behavior / scoring / metadata style — the skill `SKILL.md`.
 - Upload limit — `app.config['MAX_CONTENT_LENGTH']` in `app.py`.
 
+## Publish to YouTube (optional)
+
+Publish shorts straight from the **gallery** via the YouTube Data API v3
+(a vertical clip ≤ 3 min is auto-treated as a Short).
+
+**One-time setup:**
+1. [Google Cloud Console](https://console.cloud.google.com/) → new project → enable **YouTube Data API v3**.
+2. Configure the **OAuth consent screen** (External; add yourself as a Test user).
+3. Create an **OAuth client ID** → type **Desktop app** → download the JSON.
+4. Save it as `youtube_client_secret.json` in the project root (gitignored).
+5. `pip install -r requirements.txt`, then click **Connect YouTube** in the gallery and sign in.
+
+- Each short has an **Upload to YouTube** button; uploaded shorts show a watch
+  link and appear in the **Uploaded** tab. Uploads are idempotent (no duplicates).
+- Default privacy is **private** (recommended until your OAuth app is verified).
+- The login token is stored **encrypted** (OS keychain, or a Fernet-encrypted file
+  with the key in the keychain) — never committed, never logged.
+- Quota note: ~1600 units per upload; the default 10,000/day ≈ 6 uploads/day.
+
 ## Privacy
 
-All processing is local. Videos never leave your machine, and there are no API
-keys or external model downloads — the analysis is performed by your Copilot
-agent session.
+All video processing is local. Videos never leave your machine except when *you*
+explicitly upload a short to your own YouTube account. Analysis is performed by
+your Copilot agent session; there are no external model downloads.
 
 ## License
 
