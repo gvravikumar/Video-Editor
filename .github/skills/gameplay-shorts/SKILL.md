@@ -101,17 +101,35 @@ Judge each candidate window on these signals and keep only genuine highlights:
 
 ## Writing hooks & metadata (retention + CTR)
 
+Metadata is generated and written to disk **while each short is saved**
+(`services/renderer.py`), so author the best content in the plan — the renderer
+enforces YouTube limits and fills any gaps.
+
 - `hook_text`: ALL-CAPS, ≤30 chars, creates curiosity — "WAIT FOR IT",
   "1v4 CLUTCH?!", "HOW DID THIS MISS?", "LAST SECOND WIN". Rendered on the hook.
-- `title`: ≤60 chars, 1–2 emojis, specific to what happens — "🔥 INSANE 1v4 Clutch
-  to Win the Round!". No clickbait you can't back up.
-- `description`: 1–2 sentences describing the moment + a call to action
-  ("Watch till the end!" / "Would you have clutched this?").
-- `tags`: 10–15 hashtags. Include the game if you can identify it (logo/HUD),
-  the category, and broad reach tags (#gaming #shorts #viral). The validator adds
-  category/base tags automatically, so focus on game- and moment-specific ones.
+  (Emojis are stripped from the burned-in overlay but kept in title/tags.)
+- `title`: **≤ 100 chars (YouTube limit)**, 1–2 emojis, specific to what happens —
+  "🏆 VICTORY ROYALE! #1 Win in Fortnite Blitz Royale!". No clickbait you can't back up.
+- `description`: **write a detailed 3–5 sentence STORY** (≤ 5000 chars) — the setup,
+  the tension, and the payoff, using concrete details you saw (weapon, opponent
+  name from the kill feed, XP, placement). End with a **call-to-action** question
+  and a **hashtag line**. If you leave it short, the renderer auto-adds a CTA and
+  hashtags, but author the full story for the best result.
+- `tags`: 10–15 hashtags. Include the game if identifiable (logo/HUD), the
+  category, and broad-reach tags (#gaming #shorts #viral). The validator adds
+  category/base tags automatically; focus on game- and moment-specific ones.
+  Exposed as comma-separated `tags_csv` (e.g. `#fortnite, #clutch, #win`).
 - `game`: your best guess from the HUD/art style (e.g. "Valorant", "Fortnite",
   "Call of Duty"). Leave "" if unsure.
+
+Example description quality bar:
+> WINNER WINNER — took the entire lobby down for the #1 Victory Royale! Clean
+> rotations, smart fights, and a last-circle finish sealed the crown. Drop a 🏆 if
+> you felt this one, and tell me which win to show next!
+>
+> 👉 Follow for more clips, and drop a comment with your take!
+>
+> #fortnite #victoryroyale #win #1stplace #battleroyale #shorts
 
 ## plan.json schema
 

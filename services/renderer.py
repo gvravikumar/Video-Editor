@@ -57,6 +57,15 @@ def _target_fps(source_fps):
 
 
 # ------------------------------------------------------------------- metadata
+# YouTube limits enforced at save time.
+YT_TITLE_MAX = 100
+YT_DESCRIPTION_MAX = 5000
+DEFAULT_CTA = "👉 Follow for more clips, and drop a comment with your take!"
+# plan_schema fills this placeholder when the agent omits a description; treat it
+# as "empty" so we can build a real story from the moment's `reason` instead.
+_PLACEHOLDER_DESC = "An incredible gameplay moment you don't want to miss! Watch till the end."
+
+
 def format_tags_csv(tags):
     """
     Normalize a tag list into a single comma-separated hashtag string, e.g.
@@ -73,6 +82,48 @@ def format_tags_csv(tags):
         seen.add(t.lower())
         out.append(t)
     return ", ".join(out)
+
+
+def build_title(moment):
+    """Return a YouTube-safe title (<= 100 chars, non-empty)."""
+    title = (moment.get("title") or "").strip()
+    if not title:
+        cat = moment.get("category", "INTENSE").title()
+        title = f"Epic {cat} Gameplay Moment! 🎮🔥"
+    if len(title) > YT_TITLE_MAX:
+        title = title[:YT_TITLE_MAX - 1].rstrip() + "…"
+    return title
+
+
+def build_description(moment):
+    """
+    Compose a rich, YouTube-ready description (<= 5000 chars) generated while the
+    short is saved. Uses the agent-authored story if present, otherwise builds one
+    from the moment's reason/category, then guarantees a call-to-action and a
+    trailing hashtag line so every saved short ships complete metadata.
+    """
+    desc = (moment.get("description") or "").strip()
+    reason = (moment.get("reason") or "").strip()
+    category = moment.get("category", "INTENSE")
+    tags = moment.get("tags") or []
+
+    # If there's no real description (or only the schema placeholder), build a
+    # story from what the agent observed in `reason`.
+    if not desc or desc == _PLACEHOLDER_DESC:
+        lead = reason or f"An epic {category.lower()} moment you don't want to miss."
+        desc = f"{lead} Watch how it all unfolds — right up to the payoff."
+
+    # Ensure a call-to-action is present.
+    if "follow" not in desc.lower() and "comment" not in desc.lower() and "subscribe" not in desc.lower():
+        desc = f"{desc}\n\n{DEFAULT_CTA}"
+
+    # Ensure a trailing hashtag line (helps discovery); only if not already present.
+    if "#" not in desc.split("\n")[-1]:
+        tag_line = format_tags_csv(tags).replace(", ", " ")
+        if tag_line:
+            desc = f"{desc}\n\n{tag_line}"
+
+    return desc[:YT_DESCRIPTION_MAX].strip()
 
 
 def _write_short_metadata(txt_path, moment, tags_csv):
@@ -283,6 +334,23 @@ def _render_one(video_path, moment, output_path, thumb_path, tmp_dir, index):
         )
         final_duration = final.duration
 
+        # --- Generate + save the title/description/tags WHILE saving the short ---
+        # Every short ships with copy-paste-ready, YouTube-limit metadata written
+        # atomically next to its .mp4 (short_XXX.txt).
+        title = build_title(moment)
+        description = build_description(moment)
+        tags = moment.get("tags") or []
+        tags_csv = format_tags_csv(tags)
+        # keep the moment in sync so downstream (manifest, combined file) matches
+        moment["title"] = title
+        moment["description"] = description
+        meta_moment = {"title": title, "description": description}
+        txt_path = os.path.splitext(output_path)[0] + ".txt"
+        try:
+            _write_short_metadata(txt_path, meta_moment, tags_csv)
+        except Exception as e:
+            logger.warning("Could not write metadata sidecar for %s: %s", output_path, e)
+
         # Thumbnail from the peak instant of the source (most epic frame)
         peak = moment.get("peak_time", end_time)
         _grab_thumbnail(source, peak, thumb_path, moment.get("hook_text"))
@@ -298,6 +366,11 @@ def _render_one(video_path, moment, output_path, thumb_path, tmp_dir, index):
             "duration": round(final_duration, 2),
             "hook_structure": structure,
             "fps": out_fps,
+            "title": title,
+            "description": description,
+            "tags": tags,
+            "tags_csv": tags_csv,
+            "metadata_path": txt_path if os.path.exists(txt_path) else None,
         }
     finally:
         source.close()
@@ -412,15 +485,11 @@ def render_shorts(video_path, plan, output_dir, progress_callback=None,
                     logger.warning("Per-short smoothing failed: %s", e)
 
             base = os.path.basename(output_dir)
-            tags_csv = format_tags_csv(moment["tags"])
-
-            # Copy-paste-ready metadata sidecar next to the short.
+            # Metadata (title/description/tags) was generated + written to the
+            # sidecar inside _render_one, atomically with the short's .mp4 save.
             meta_name = f"short_{idx + 1:03d}_{category}.txt"
             meta_path = os.path.join(output_dir, meta_name)
-            try:
-                _write_short_metadata(meta_path, moment, tags_csv)
-            except Exception as e:
-                logger.warning("Could not write metadata sidecar for short %d: %s", idx + 1, e)
+            tags_csv = info.get("tags_csv", format_tags_csv(moment.get("tags", [])))
 
             shorts.append({
                 "index": idx,
@@ -435,9 +504,9 @@ def render_shorts(video_path, plan, output_dir, progress_callback=None,
                 "hook_structure": info["hook_structure"],
                 "moment": moment,
                 "metadata": {
-                    "title": moment["title"],
-                    "description": moment["description"],
-                    "tags": moment["tags"],
+                    "title": info.get("title", moment.get("title", "")),
+                    "description": info.get("description", moment.get("description", "")),
+                    "tags": info.get("tags", moment.get("tags", [])),
                     "tags_csv": tags_csv,
                     "hook_text": moment.get("hook_text", ""),
                 },

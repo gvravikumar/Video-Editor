@@ -115,9 +115,10 @@ def _normalize_moment(raw: Dict[str, Any], index: int) -> Dict[str, Any]:
     virality = _coerce_int(raw.get("virality_score"), default=5, lo=1, hi=10)
 
     hook_text = str(raw.get("hook_text", "")).strip()[:40]
+    # YouTube limits: title <= 100 chars, description <= 5000 chars.
     title = str(raw.get("title", "")).strip()[:100]
-    description = str(raw.get("description", "")).strip()[:400]
-    reason = str(raw.get("reason", "")).strip()[:400]
+    description = str(raw.get("description", "")).strip()[:5000]
+    reason = str(raw.get("reason", "")).strip()[:600]
     tags = _normalize_tags(raw.get("tags"), category)
 
     if not title:
