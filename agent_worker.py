@@ -30,12 +30,18 @@ REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, REPO_DIR)
 
 from services.job_queue import init_job_queue, STATUS_COMPLETED, STATUS_ERROR  # noqa: E402
+from services.source_store import init_source_store  # noqa: E402
 
 JOBS_DIR = os.path.join(REPO_DIR, "jobs")
+SOURCES_DIR = os.path.join(REPO_DIR, "state", "sources")
 
 
 def _jq():
     return init_job_queue(JOBS_DIR)
+
+
+def _ss():
+    return init_source_store(SOURCES_DIR)
 
 
 def _print(obj):
@@ -210,6 +216,65 @@ def cmd_wait(args):
     _print({"job_id": args.job_id, "status": "timeout"})
 
 
+# ---------------------------------------------------------------- source metadata
+def cmd_sources(_args):
+    """List source gameplays awaiting FULL-VIDEO metadata from the agent."""
+    ss = _ss()
+    items = ss.awaiting()
+    _print({
+        "awaiting_source_metadata": [
+            {"filename": r.get("filename"), "frames_dir": r.get("frames_dir"),
+             "frame_count": r.get("frame_count"), "duration": r.get("duration")}
+            for r in items
+        ],
+        "total": len(items),
+        "MUST_READ": "Write ONE set of YouTube metadata for the WHOLE video. View "
+                     "the contact sheets in <frames_dir>/sheets/. Ground the summary "
+                     "in what you actually see. Title <=100 chars; description a "
+                     "detailed overview + CTA + hashtags; 10-15 tags.",
+    })
+
+
+def cmd_show_source(args):
+    ss = _ss()
+    rec = ss.get(args.filename)
+    if not rec:
+        _print({"error": "source not found"})
+        sys.exit(1)
+    sheets = None
+    frames_dir = rec.get("frames_dir")
+    if frames_dir:
+        idx = os.path.join(frames_dir, "sheets", "index.json")
+        if os.path.exists(idx):
+            with open(idx) as f:
+                sheets = json.load(f)
+    _print({"source": rec, "sheets": sheets})
+
+
+def cmd_submit_meta(args):
+    """Submit full-video metadata for a source gameplay (title/description/tags)."""
+    ss = _ss()
+    raw = sys.stdin.read() if args.meta == "-" else open(args.meta).read()
+    meta = json.loads(raw)
+    # Quality guard: require a grounded summary + real title.
+    problems = []
+    if len(str(meta.get("title", "")).strip()) < 5:
+        problems.append("title too short/absent.")
+    if len(str(meta.get("description", "")).strip()) < 80:
+        problems.append("description too short — write a detailed overview of the "
+                        "gameplay (what happens, highlights) + a call to action.")
+    if len(str(meta.get("summary", meta.get("description", ""))).strip()) < 15:
+        problems.append("summary/grounding missing — describe what you actually saw.")
+    if problems and not args.force:
+        _print({"status": "rejected", "problems": problems,
+                "message": "Fix these or re-run with --force."})
+        sys.exit(2)
+    if not ss.get(args.filename):
+        ss.ensure(args.filename)
+    normalized = ss.save_meta(args.filename, meta)
+    _print({"status": "submitted", "filename": args.filename, "meta": normalized})
+
+
 def main():
     parser = argparse.ArgumentParser(description="Agent worker for the shorts generator")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -240,6 +305,19 @@ def main():
     p_wait.add_argument("job_id")
     p_wait.add_argument("--timeout", type=int, default=600)
     p_wait.set_defaults(func=cmd_wait)
+
+    # Source full-video metadata commands
+    sub.add_parser("sources").set_defaults(func=cmd_sources)
+
+    p_ss = sub.add_parser("show-source")
+    p_ss.add_argument("filename")
+    p_ss.set_defaults(func=cmd_show_source)
+
+    p_sm = sub.add_parser("submit-meta")
+    p_sm.add_argument("filename")
+    p_sm.add_argument("meta", help="path to meta.json, or '-' for stdin")
+    p_sm.add_argument("--force", action="store_true")
+    p_sm.set_defaults(func=cmd_submit_meta)
 
     args = parser.parse_args()
     args.func(args)

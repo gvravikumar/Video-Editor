@@ -219,12 +219,29 @@ Outputs per job dir (`shorts/<job_id>/`): `short_NNN_<category>.mp4`,
 ## 8. Results UI
 
 - Main app: `http://127.0.0.1:8000/` (upload + generate + per-video results).
-- **Gallery:** `http://127.0.0.1:8000/gallery` — two tabs:
-  - **Generated** — every generated short with thumbnail, title, description,
-    hashtag chips, hover-preview, copy/download, and an **Upload to YouTube** button.
+- **Gallery:** `http://127.0.0.1:8000/gallery` — three tabs:
+  - **Source Gameplays** — every uploaded raw gameplay. Per video you can:
+    generate **full-video AI metadata** (agent-in-the-loop), **upload the full
+    gameplay** to YouTube with that metadata, or **generate hook shorts**.
+    Backed by `GET /sources/data`.
+  - **Generated Shorts** — every generated short (not-yet-uploaded) with thumbnail,
+    title, description, hashtags, hover-preview, copy/download, and Upload/Upload-all.
     Backed by `GET /gallery/data`.
-  - **Uploaded** — the archive of shorts already published to YouTube, each with a
+  - **Uploaded** — the archive of anything published to YouTube, with a
     YouTube-style thumbnail + watch link. Backed by `GET /youtube/archive`.
+
+### Full-video (source) metadata — agent flow
+Same agent-in-the-loop pattern as shorts, but you write **one** metadata set for
+the whole gameplay:
+```bash
+python3 agent_worker.py sources                     # sources awaiting full-video metadata
+python3 agent_worker.py show-source <filename>      # detail + contact-sheet index
+# …view the sheets, understand the whole match…
+python3 agent_worker.py submit-meta <filename> meta.json   # {title, description, tags, game, summary}
+```
+`meta.json` fields: `title` (≤100), `description` (detailed overview + CTA + hashtags,
+≤5000), `tags` (10–15), `game`, `summary` (grounding). The app then lets the user
+upload the full video via `POST /sources/upload-youtube`.
 
 ---
 

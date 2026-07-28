@@ -110,6 +110,8 @@
             border:1px solid var(--border); border-radius:999px;
             padding:.05rem .5rem; font-size:.62rem; font-weight:600; text-transform:uppercase; letter-spacing:.3px;
         }
+        /* Source gameplays are landscape → 16:9 thumbnails */
+        .src-thumb { aspect-ratio: 16 / 9; }
         .card-actions { display:flex; gap:.4rem; margin-top:auto; }
         .card-actions .btn { font-size: .72rem; padding: .3rem .5rem; }
         .nav-tabs .nav-link {
@@ -157,14 +159,39 @@
         </div>
         <div class="container-fluid px-4">
             <ul class="nav nav-tabs border-0" id="galleryTabs">
-                <li class="nav-item"><button class="nav-link active" data-tab="generated"><i class="bi bi-grid-3x3-gap me-1"></i>Generated <span class="badge bg-secondary rounded-pill ms-1" id="tab-generated-count">0</span></button></li>
+                <li class="nav-item"><button class="nav-link active" data-tab="sources"><i class="bi bi-collection-play me-1"></i>Source Gameplays <span class="badge bg-secondary rounded-pill ms-1" id="tab-sources-count">0</span></button></li>
+                <li class="nav-item"><button class="nav-link" data-tab="generated"><i class="bi bi-grid-3x3-gap me-1"></i>Generated Shorts <span class="badge bg-secondary rounded-pill ms-1" id="tab-generated-count">0</span></button></li>
                 <li class="nav-item"><button class="nav-link" data-tab="uploaded"><i class="bi bi-youtube me-1"></i>Uploaded <span class="badge bg-danger rounded-pill ms-1" id="tab-uploaded-count">0</span></button></li>
             </ul>
         </div>
     </nav>
 
     <main class="container-fluid px-4 py-4">
-        <div id="tab-generated">
+        <div id="tab-sources">
+            <p class="text-muted small mb-2">Your uploaded gameplays. For each one you can <strong>generate AI title/description/tags</strong> and upload the <strong>full video</strong> to YouTube, or <strong>generate hook shorts</strong>.</p>
+
+            <!-- Source toolbar: analyze-all + AI-agent connection status -->
+            <div class="d-flex align-items-center flex-wrap gap-2 mb-3">
+                <button id="analyze-all-btn" class="btn btn-primary rounded-pill" onclick="analyzeAll(this)">
+                    <i class="bi bi-magic me-1"></i>Analyze all gameplays with AI
+                </button>
+                <span id="agent-indicator" class="stat-pill"><i class="bi bi-robot me-1"></i><span id="agent-indicator-text">Checking AI agent…</span></span>
+            </div>
+            <div id="agent-banner" class="alert d-none py-2 px-3 mb-3" style="background:rgba(255,214,10,.10);border:1px solid var(--border);color:#ffd60a;font-size:.85rem">
+                <i class="bi bi-hourglass-split me-1"></i>
+                <span id="agent-banner-text"></span>
+                <button class="btn btn-sm btn-outline-warning rounded-pill ms-2" onclick="copyAgentPrompt()"><i class="bi bi-clipboard me-1"></i>Copy prompt for Copilot</button>
+            </div>
+
+            <div id="sources-root" class="shorts-grid"></div>
+            <div id="sources-empty" class="empty-state d-none">
+                <i class="bi bi-controller fs-1 d-block mb-3"></i>
+                <h5>No gameplays uploaded yet</h5>
+                <p>Upload a gameplay video from the editor and it'll show up here.</p>
+                <a href="/" class="btn btn-primary rounded-pill mt-2"><i class="bi bi-upload me-1"></i>Upload a gameplay</a>
+            </div>
+        </div>
+        <div id="tab-generated" class="d-none">
             <div id="gen-toolbar" class="d-flex align-items-center flex-wrap gap-2 mb-3 d-none">
                 <button id="bulk-btn" class="btn btn-danger rounded-pill" onclick="openBulkChooser()">
                     <i class="bi bi-youtube me-1"></i>Upload all to YouTube
@@ -535,10 +562,13 @@
 
         // Privacy chooser (card button → pick visibility → upload).
         // When `_bulkMode` is true, the chosen privacy applies to ALL pending shorts.
+        // When `_pendingSource` is set, it uploads a FULL source gameplay instead.
         let _pendingShort = null;
+        let _pendingSource = null;
         let _bulkMode = false;
         function openPrivacyChooser(s) {
             _bulkMode = false;
+            _pendingSource = null;
             _pendingShort = s;
             document.getElementById('pc-title').textContent = s.title;
             document.getElementById('pc-note').innerHTML =
@@ -557,6 +587,7 @@
         }
         async function choosePrivacy(privacy, btn) {
             bootstrap.Modal.getOrCreateInstance(document.getElementById('privacyModal')).hide();
+            if (_pendingSource) { uploadSource(privacy); return; }
             if (_bulkMode) { runBulk(privacy); return; }
             const s = _pendingShort;
             if (!s) return;
@@ -741,15 +772,214 @@
                 document.querySelectorAll('#galleryTabs .nav-link').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 const tab = btn.dataset.tab;
+                document.getElementById('tab-sources').classList.toggle('d-none', tab !== 'sources');
                 document.getElementById('tab-generated').classList.toggle('d-none', tab !== 'generated');
                 document.getElementById('tab-uploaded').classList.toggle('d-none', tab !== 'uploaded');
             });
         });
 
+        // ---------------- Source Gameplays tab ----------------
+        const fmtDur = s => { s = Math.round(s||0); const m = Math.floor(s/60); return `${m}:${String(s%60).padStart(2,'0')}`; };
+
+        async function loadSources() {
+            const data = await fetch('/sources/data').then(r => r.json()).catch(() => ({count:0, items:[]}));
+            document.getElementById('tab-sources-count').textContent = data.count;
+            const root = document.getElementById('sources-root');
+            root.innerHTML = '';
+            document.getElementById('sources-empty').classList.toggle('d-none', data.count > 0);
+            data.items.forEach(it => root.appendChild(sourceCard(it)));
+            refreshAgentStatus();
+        }
+
+        function sourceCard(it) {
+            const col = document.createElement('div');
+            col.className = 'grid-item';
+            col.dataset.file = it.filename;
+            const meta = it.meta;
+            const uploaded = it.youtube && it.youtube.video_id;
+            const st = it.meta_status;
+            const analyzing = (st === 'pending_frames' || st === 'awaiting_agent');
+            const dur = it.duration ? fmtDur(it.duration) : '';
+            const res = it.resolution ? `${it.resolution[0]}×${it.resolution[1]}` : '';
+
+            // Metadata block (shown once generated)
+            let metaBlock = '';
+            if (meta) {
+                const tags = (meta.tags||[]).map(hashTag);
+                metaBlock = `
+                    <div class="src-meta mt-2">
+                        <div class="game-chip mb-1">${esc(meta.game || 'Gameplay')}</div>
+                        <div class="short-title" style="font-size:.9rem">${esc(meta.title)}</div>
+                        <p class="short-desc" style="-webkit-line-clamp:3">${esc(meta.description)}</p>
+                        <div class="tag-chips">${tags.slice(0,6).map(t=>`<span class="tag-chip">${esc(t)}</span>`).join('')}${tags.length>6?`<span class="tag-chip">+${tags.length-6}</span>`:''}</div>
+                    </div>`;
+            }
+
+            // Status / action row
+            let statusLine = '';
+            if (analyzing) {
+                statusLine = `<div class="small text-info mt-2"><span class="spinner-border spinner-border-sm me-1"></span>${esc(it.meta_message || 'Analyzing…')}${st==='awaiting_agent' ? ' (waiting for AI agent)' : ''}</div>`;
+            } else if (st === 'error') {
+                statusLine = `<div class="small text-danger mt-2">Analysis failed. Try again.</div>`;
+            }
+
+            col.innerHTML = `
+                <div class="short-card src-card">
+                    <div class="thumb-wrap src-thumb" style="background-image:url('${esc(it.thumbnail_url)}')">
+                        <video muted loop preload="none" playsinline><source src="${esc(it.video_url)}" type="video/mp4"></video>
+                        <span class="badge-dur">${esc(dur)}</span>
+                        ${res ? `<span class="badge-cat rounded-pill" style="background:#333">${esc(res)}</span>` : ''}
+                        ${uploaded ? `<span class="yt-badge"><i class="bi bi-youtube me-1"></i>${esc(it.youtube.privacy||'')}</span>` : ''}
+                        ${it.shorts_status === 'completed' ? `<span class="yt-badge" style="left:auto;right:10px;background:#2a6fb5"><i class="bi bi-scissors me-1"></i>Shorts</span>` : ''}
+                        <span class="play-fab"><i class="bi bi-play-fill"></i></span>
+                    </div>
+                    <div class="short-body">
+                        <h6 class="short-title" title="${esc(it.filename)}">${esc(it.filename)}</h6>
+                        ${metaBlock}
+                        ${statusLine}
+                        <div class="card-actions" style="flex-wrap:wrap">
+                            ${meta ? `
+                                <button class="btn btn-outline-secondary rounded-pill flex-fill" title="Copy metadata"><i class="bi bi-clipboard-check"></i></button>
+                                ${uploaded
+                                    ? `<a class="btn btn-outline-danger rounded-pill flex-fill" href="${esc(it.youtube.url)}" target="_blank"><i class="bi bi-youtube me-1"></i>Watch</a>`
+                                    : `<button class="btn btn-danger rounded-pill flex-fill src-upload-btn"><i class="bi bi-youtube me-1"></i>Upload full</button>`}
+                            ` : `
+                                <button class="btn btn-primary rounded-pill flex-fill src-analyze-btn" ${analyzing?'disabled':''}><i class="bi bi-magic me-1"></i>${analyzing?'Analyzing…':'AI metadata'}</button>
+                            `}
+                            <button class="btn btn-outline-light rounded-pill flex-fill src-shorts-btn" title="Generate hook shorts"><i class="bi bi-scissors me-1"></i>Shorts</button>
+                        </div>
+                    </div>
+                </div>`;
+
+            const vid = col.querySelector('video');
+            const wrap = col.querySelector('.thumb-wrap');
+            wrap.addEventListener('mouseenter', () => vid.play().catch(()=>{}));
+            wrap.addEventListener('mouseleave', () => { vid.pause(); vid.currentTime = 0; });
+
+            const analyzeBtn = col.querySelector('.src-analyze-btn');
+            if (analyzeBtn) analyzeBtn.addEventListener('click', () => analyzeSource(it.filename));
+            const uploadBtn = col.querySelector('.src-upload-btn');
+            if (uploadBtn) uploadBtn.addEventListener('click', () => openSourceUpload(it));
+            const copyBtn = col.querySelector('.btn-outline-secondary');
+            if (copyBtn && meta) copyBtn.addEventListener('click', () =>
+                copyText(`${meta.title}\n\n${meta.description}\n\n${meta.tags_csv}`));
+            col.querySelector('.src-shorts-btn').addEventListener('click', () => generateShorts(it));
+            return col;
+        }
+
+        async function analyzeSource(filename) {
+            showToast('Starting AI analysis…');
+            await fetch('/sources/analyze', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({ filename })
+            });
+            pollSources();
+        }
+
+        async function analyzeAll(btn) {
+            btn.disabled = true;
+            const orig = btn.innerHTML;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Queuing…';
+            try {
+                const res = await fetch('/sources/analyze-all', { method:'POST' });
+                const data = await res.json();
+                showToast(`Analyzing ${data.started_count} gameplay(s)` +
+                          (data.skipped_count ? `, ${data.skipped_count} skipped` : ''));
+                pollSources();
+            } catch (e) { showToast('Could not start bulk analysis'); }
+            finally { btn.disabled = false; btn.innerHTML = orig; }
+        }
+
+        // ---- AI-agent connection indicator (links the gallery to the Copilot agent) ----
+        async function refreshAgentStatus() {
+            let d;
+            try { d = await fetch('/sources/agent-status').then(r => r.json()); }
+            catch { return; }
+            const ind = document.getElementById('agent-indicator-text');
+            const banner = document.getElementById('agent-banner');
+            const btext = document.getElementById('agent-banner-text');
+            window._awaitingAgent = d.awaiting_agent || [];
+            if (d.extracting_count) {
+                ind.innerHTML = `Extracting ${d.extracting_count}…`;
+            } else if (d.awaiting_count) {
+                ind.innerHTML = `<span class="text-warning">${d.awaiting_count} waiting for AI agent</span>`;
+            } else {
+                ind.innerHTML = `<span class="text-success">AI agent idle — nothing waiting</span>`;
+            }
+            if (d.awaiting_count) {
+                btext.textContent = `${d.awaiting_count} gameplay(s) are analyzed and waiting for the AI agent (Copilot) to write metadata. ` +
+                    `In your Copilot chat, ask it to "process the waiting source gameplays".`;
+                banner.classList.remove('d-none');
+            } else {
+                banner.classList.add('d-none');
+            }
+        }
+        function copyAgentPrompt() {
+            const files = (window._awaitingAgent || []);
+            const prompt = files.length
+                ? `Process the waiting source gameplays and write their full-video YouTube metadata: ${files.join(', ')}`
+                : `Process the waiting source gameplays and write their full-video YouTube metadata.`;
+            copyText(prompt);
+        }
+
+        async function generateShorts(it) {
+            if (it.shorts_status && it.shorts_status !== 'error' && it.shorts_status !== 'completed') {
+                showToast('Shorts already in progress for this gameplay'); return;
+            }
+            await fetch('/ai/start', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({ filename: it.filename, fps: 2 })
+            });
+            showToast('Shorts generation started — the AI agent will analyze it. Check the Generated tab.');
+            pollSources();
+        }
+
+        // Reuse the privacy chooser for full-video upload.
+        function openSourceUpload(it) {
+            _bulkMode = false;
+            _pendingShort = null;
+            _pendingSource = it.filename;
+            document.getElementById('pc-title').textContent = it.meta ? it.meta.title : it.filename;
+            document.getElementById('pc-note').innerHTML =
+                `Uploading the <strong>full gameplay</strong> to <strong>${esc(window._yt.channel || 'your channel')}</strong>.`;
+            if (!window._yt.available || !window._yt.configured || !window._yt.connected) { openSetup(); return; }
+            bootstrap.Modal.getOrCreateInstance(document.getElementById('privacyModal')).show();
+        }
+
+        async function uploadSource(privacy) {
+            const filename = _pendingSource;
+            if (!filename) return;
+            showToast('Uploading full video to YouTube…');
+            try {
+                const res = await fetch('/sources/upload-youtube', {
+                    method:'POST', headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({ filename, privacy })
+                });
+                const data = await res.json();
+                if (res.status === 429 || data.reason === 'quota') { showToast('YouTube daily quota reached'); return; }
+                if (!res.ok) throw new Error(data.error || 'Upload failed');
+                showToast('Full gameplay uploaded to YouTube!');
+                loadSources();
+            } catch (e) { showToast(e.message); }
+            finally { _pendingSource = null; }
+        }
+
+        let _sourcesTimer = null;
+        function pollSources() {
+            clearTimeout(_sourcesTimer);
+            loadSources();
+            // keep refreshing while anything is analyzing
+            _sourcesTimer = setTimeout(async () => {
+                const d = await fetch('/sources/data').then(r=>r.json()).catch(()=>({items:[]}));
+                if (d.items.some(i => i.meta_status === 'pending_frames' || i.meta_status === 'awaiting_agent')) pollSources();
+            }, 4000);
+        }
+
         load().catch(err => {
             console.error(err);
-            document.getElementById('empty').classList.remove('d-none');
+            document.getElementById('sources-empty').classList.remove('d-none');
         });
+        loadSources();
     </script>
 </body>
 </html>

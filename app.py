@@ -48,6 +48,10 @@ from services.job_queue import (
 state_manager = init_state_manager(app.config['STATE_FOLDER'])
 job_queue = init_job_queue(app.config['JOBS_FOLDER'])
 
+# Source-video metadata store (agent-in-the-loop metadata for full gameplays).
+from services.source_store import init_source_store, get_source_store
+source_store = init_source_store(os.path.join(app.config['STATE_FOLDER'], 'sources'))
+
 # Legacy task dictionary (for backward compatibility with existing code)
 # Will be gradually migrated to state_manager
 tasks = {}
@@ -295,6 +299,265 @@ def youtube_archive():
             })
     items.sort(key=lambda x: x.get('uploaded_at', ''), reverse=True)
     return jsonify({'count': len(items), 'items': items})
+
+
+# ============================================================
+# ROUTES - Source Gameplays (full-video AI metadata + direct upload)
+# ============================================================
+
+def _source_video_id(filepath):
+    """Stable id for a source video (independent of fps) for its frames dir."""
+    import hashlib
+    h = hashlib.sha256()
+    try:
+        h.update(str(os.path.getsize(filepath)).encode())
+        with open(filepath, 'rb') as f:
+            h.update(f.read(1024 * 1024))
+    except OSError:
+        h.update(filepath.encode())
+    return 'src_' + h.hexdigest()[:18]
+
+
+def _source_meta_task(filename):
+    """Background: extract frames + contact sheets for a source, then await agent."""
+    with app.app_context():
+        ss = get_source_store()
+        try:
+            input_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            if not os.path.exists(input_path):
+                ss.mark_error(filename, 'Source video not found')
+                return
+            video_id = _source_video_id(input_path)
+            frames_dir = os.path.join(app.config['FRAMES_FOLDER'], video_id)
+            os.makedirs(frames_dir, exist_ok=True)
+            ss.update(filename, status='pending_frames', percentage=5, video_id=video_id,
+                      frames_dir=frames_dir, step_message='Extracting frames for analysis…')
+
+            manifest_path = os.path.join(frames_dir, 'manifest.json')
+            if os.path.exists(manifest_path):
+                with open(manifest_path) as f:
+                    manifest = json.load(f)
+            else:
+                from services.frame_extractor import extract_frames
+                # Low fps sized to ~120 frames total — enough to understand the whole
+                # video without extracting thousands of frames.
+                dur = 0
+                meta = _get_video_metadata_fast(input_path)
+                if meta:
+                    dur = meta.get('duration', 0) or 0
+                fps = 1.0
+                if dur > 0:
+                    fps = max(0.2, min(1.0, 120.0 / dur))
+
+                def prog(cur, total, msg):
+                    pct = 5 + int((cur / total) * 30) if total else 5
+                    ss.update(filename, percentage=pct, step_message=msg)
+
+                manifest = extract_frames(input_path, frames_dir, fps=fps, progress_callback=prog)
+
+            sheets_index = os.path.join(frames_dir, 'sheets', 'index.json')
+            if not os.path.exists(sheets_index):
+                from services.contact_sheet import build_contact_sheets
+                ss.update(filename, percentage=38, step_message='Building contact sheets for the AI agent…')
+                build_contact_sheets(frames_dir, manifest_path=manifest_path)
+
+            ss.mark_awaiting_agent(filename, frames_dir, manifest)
+            logger.info("Source %s awaiting agent metadata (%d frames)", filename, manifest.get('frame_count', 0))
+        except Exception as e:
+            logger.error("Source metadata task failed for %s: %s", filename, e, exc_info=True)
+            ss.mark_error(filename, str(e))
+
+
+@app.route('/sources/data')
+def sources_data():
+    """List uploaded source gameplays with AI metadata + shorts/upload status."""
+    ss = get_source_store()
+    jq = get_job_queue()
+    upload_folder = app.config['UPLOAD_FOLDER']
+
+    # filename -> latest shorts job (to show 'has shorts' / status)
+    shorts_by_file = {}
+    for job in jq.list_jobs():
+        fn = job.get('filename')
+        if fn:
+            ex = shorts_by_file.get(fn)
+            if not ex or job.get('created_at', '') > ex.get('created_at', ''):
+                shorts_by_file[fn] = job
+
+    items = []
+    if os.path.exists(upload_folder):
+        for filename in os.listdir(upload_folder):
+            fp = os.path.join(upload_folder, filename)
+            if not os.path.isfile(fp) or not allowed_file(filename):
+                continue
+            meta_info = _get_video_metadata_fast(fp) or {}
+            rec = ss.get(filename) or {}
+            sj = shorts_by_file.get(filename)
+            items.append({
+                'filename': filename,
+                'size_mb': round(os.path.getsize(fp) / (1024 * 1024), 1),
+                'modified': os.path.getmtime(fp),
+                'duration': meta_info.get('duration'),
+                'resolution': meta_info.get('resolution'),
+                'fps': meta_info.get('fps'),
+                'thumbnail_url': url_for('source_thumb', filename=filename),
+                'video_url': url_for('serve_upload', filename=filename),
+                'meta_status': rec.get('status', 'idle'),
+                'meta_percentage': rec.get('percentage', 0),
+                'meta_message': rec.get('step_message', ''),
+                'meta': rec.get('meta'),
+                'youtube': rec.get('youtube'),
+                'shorts_job_id': sj.get('job_id') if sj else None,
+                'shorts_status': sj.get('status') if sj else None,
+            })
+    items.sort(key=lambda x: x['modified'], reverse=True)
+    return jsonify({'count': len(items), 'items': items})
+
+
+@app.route('/sources/thumb/<path:filename>')
+def source_thumb(filename):
+    """Serve (and cache) a mid-frame thumbnail for a source gameplay video."""
+    import cv2
+    safe = secure_filename(filename)
+    src = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    if not os.path.exists(src):
+        return jsonify({'error': 'not found'}), 404
+    thumb_dir = os.path.join(app.config['FRAMES_FOLDER'], '_source_thumbs')
+    os.makedirs(thumb_dir, exist_ok=True)
+    thumb = os.path.join(thumb_dir, safe + '.jpg')
+    if not os.path.exists(thumb):
+        try:
+            cap = cv2.VideoCapture(src)
+            frames = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(frames * 0.5))  # mid-video frame
+            ok, frame = cap.read()
+            cap.release()
+            if ok:
+                h, w = frame.shape[:2]
+                scale = 480.0 / max(w, 1)
+                frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
+                cv2.imwrite(thumb, frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        except Exception as e:
+            logger.debug("source thumb failed for %s: %s", filename, e)
+    if os.path.exists(thumb):
+        return send_file(thumb)
+    return jsonify({'error': 'thumb unavailable'}), 404
+
+
+@app.route('/sources/analyze', methods=['POST'])
+def sources_analyze():
+    """Trigger agent-in-the-loop metadata generation for a full source gameplay."""
+    data = request.json or {}
+    filename = data.get('filename')
+    if not filename:
+        return jsonify({'error': 'filename required'}), 400
+    if not os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], filename)):
+        return jsonify({'error': 'source not found'}), 404
+    ss = get_source_store()
+    rec = ss.get(filename)
+    if rec and rec.get('status') in ('pending_frames', 'awaiting_agent'):
+        return jsonify({'status': 'already_running', 'source': rec})
+    ss.update(filename, status='pending_frames', percentage=1,
+              step_message='Queued for analysis…', error=None)
+    threading.Thread(target=_source_meta_task, args=(filename,), daemon=True).start()
+    return jsonify({'status': 'success', 'filename': filename})
+
+
+@app.route('/sources/analyze-all', methods=['POST'])
+def sources_analyze_all():
+    """
+    Kick off metadata analysis for every source gameplay that doesn't already have
+    metadata (and isn't already running). Extraction runs in background threads;
+    each ends parked as 'awaiting_agent' for the Copilot agent to pick up.
+    """
+    ss = get_source_store()
+    upload_folder = app.config['UPLOAD_FOLDER']
+    started, skipped = [], []
+    if os.path.exists(upload_folder):
+        for filename in sorted(os.listdir(upload_folder)):
+            fp = os.path.join(upload_folder, filename)
+            if not os.path.isfile(fp) or not allowed_file(filename):
+                continue
+            rec = ss.get(filename)
+            status = rec.get('status') if rec else 'idle'
+            has_meta = bool(rec and rec.get('meta'))
+            if has_meta or status in ('pending_frames', 'awaiting_agent'):
+                skipped.append(filename)
+                continue
+            ss.update(filename, status='pending_frames', percentage=1,
+                      step_message='Queued for analysis…', error=None)
+            threading.Thread(target=_source_meta_task, args=(filename,), daemon=True).start()
+            started.append(filename)
+    return jsonify({'status': 'success', 'started': started,
+                    'started_count': len(started), 'skipped_count': len(skipped)})
+
+
+@app.route('/sources/agent-status', methods=['GET'])
+def sources_agent_status():
+    """
+    Summarize how many source gameplays are waiting for the AI agent vs. being
+    extracted vs. done — so the gallery can show a clear 'agent needs to act' banner.
+    """
+    ss = get_source_store()
+    recs = ss.all()
+    awaiting = [r['filename'] for r in recs if r.get('status') == 'awaiting_agent']
+    extracting = [r['filename'] for r in recs if r.get('status') == 'pending_frames']
+    completed = sum(1 for r in recs if r.get('status') == 'completed')
+    return jsonify({
+        'awaiting_agent': awaiting,
+        'awaiting_count': len(awaiting),
+        'extracting_count': len(extracting),
+        'completed_count': completed,
+    })
+    if not filename:
+        return jsonify({'error': 'filename required'}), 400
+    ss = get_source_store()
+    if not ss.get(filename):
+        return jsonify({'error': 'source metadata job not found'}), 404
+    try:
+        meta = ss.save_meta(filename, data)
+    except Exception as e:
+        return jsonify({'error': f'invalid metadata: {e}'}), 400
+    return jsonify({'status': 'success', 'meta': meta})
+
+
+@app.route('/sources/upload-youtube', methods=['POST'])
+def sources_upload_youtube():
+    """Upload the FULL source gameplay to YouTube using its AI metadata."""
+    from services import youtube_uploader
+    data = request.json or {}
+    filename = data.get('filename')
+    privacy = data.get('privacy', youtube_uploader.DEFAULT_PRIVACY)
+    if not filename:
+        return jsonify({'error': 'filename required'}), 400
+    ss = get_source_store()
+    rec = ss.get(filename)
+    if not rec or not rec.get('meta'):
+        return jsonify({'error': 'Generate AI metadata for this gameplay first.'}), 400
+    if rec.get('youtube') and rec['youtube'].get('video_id'):
+        return jsonify({'status': 'already_uploaded', 'youtube': rec['youtube']})
+
+    src = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    if not os.path.exists(src):
+        return jsonify({'error': 'source not found'}), 404
+    thumb = os.path.join(app.config['FRAMES_FOLDER'], '_source_thumbs', secure_filename(filename) + '.jpg')
+    meta = rec['meta']
+    try:
+        yt = youtube_uploader.upload(
+            video_path=src,
+            title=meta.get('title', filename),
+            description=meta.get('description', ''),
+            tags=meta.get('tags', []),
+            privacy=privacy,
+            thumbnail_path=thumb if os.path.exists(thumb) else None,
+        )
+    except youtube_uploader.QuotaExceededError as e:
+        return jsonify({'error': str(e), 'reason': 'quota'}), 429
+    except Exception as e:
+        logger.error("Source YouTube upload failed for %s: %s", filename, e)
+        return jsonify({'error': str(e)}), 400
+    ss.set_youtube(filename, yt)
+    return jsonify({'status': 'success', 'youtube': yt})
 
 
 # ============================================================
@@ -1018,4 +1281,4 @@ def system_info():
 # ============================================================
 
 if __name__ == '__main__':
-    app.run(debug=True, port=8000)
+    app.run(debug=True, port=8000, threaded=True)
