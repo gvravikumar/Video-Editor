@@ -27,6 +27,37 @@ from moviepy.editor import (
 
 logger = logging.getLogger(__name__)
 
+# Cross-platform bold-font candidates (macOS, Linux, Windows). Tried in order;
+# falls back to PIL's default font if none are found.
+_BOLD_FONT_CANDIDATES = (
+    # macOS
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/Library/Fonts/Arial Bold.ttf",
+    # Linux
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    # Windows
+    "C:\\Windows\\Fonts\\arialbd.ttf",
+    "C:\\Windows\\Fonts\\segoeuib.ttf",
+    "C:\\Windows\\Fonts\\ariblk.ttf",
+    "C:\\Windows\\Fonts\\Arial.ttf",
+    # bare names (PIL resolves via the OS font dir on some platforms)
+    "arialbd.ttf",
+    "DejaVuSans-Bold.ttf",
+)
+
+
+def _load_bold_font(size):
+    """Return a bold TrueType font at `size`, trying OS-specific paths; None if none work."""
+    from PIL import ImageFont
+    for candidate in _BOLD_FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(candidate, size)
+        except Exception:
+            continue
+    return None
+
 # Target dimensions for YouTube Shorts / Instagram Reels / TikTok
 TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
@@ -34,7 +65,12 @@ ASPECT_RATIO = 9 / 16  # 0.5625
 
 HOOK_DURATION = 7          # seconds of climax shown first
 MIN_SHORT_DURATION = 15
-MAX_SHORT_DURATION = 60
+# YouTube counts a vertical video <= 3 min as a Short. We cap just under that
+# (2:59) so a moment can be extended into a longer, higher-watch-time Short while
+# staying eligible. The actual length still follows the moment window; this is
+# only the ceiling.
+SHORTS_MAX_SECONDS = 179   # 2:59 — stay under YouTube's 3:00 Shorts limit
+MAX_SHORT_DURATION = SHORTS_MAX_SECONDS
 DEFAULT_SHORT_DURATION = 40
 HOOK_TEXT_SECONDS = 2.5    # how long the hook overlay stays on screen
 
@@ -198,20 +234,7 @@ def _render_hook_text_png(text, out_path):
     img = Image.new("RGBA", (TARGET_WIDTH, TARGET_HEIGHT), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    # Try a few common bold fonts; fall back to PIL default.
-    font = None
-    for candidate in (
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-        "/System/Library/Fonts/Helvetica.ttc",
-        "/Library/Fonts/Arial Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "arialbd.ttf",
-    ):
-        try:
-            font = ImageFont.truetype(candidate, 96)
-            break
-        except Exception:
-            continue
+    font = _load_bold_font(96)
     if font is None:
         font = ImageFont.load_default()
 

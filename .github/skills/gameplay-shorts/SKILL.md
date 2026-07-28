@@ -37,6 +37,13 @@ python3 agent_worker.py wait <job_id> --timeout 900  # block until render done
 
 ## Workflow (do this every time)
 
+> 🚨 **STEP 0 — MANDATORY:** open and follow **`HOOK_DETECTION.md`** in the project
+> root. It is the strict, authoritative playbook for finding hook events (vision
+> gate, ground-truth payoff signals, the ≥6 score filter, anti-patterns, and a
+> mandatory self-verification checklist). Do **not** pick any moment or submit a
+> plan without satisfying every rule in it. If you cannot view images, STOP —
+> this task requires a multimodal agent.
+
 1. **Find the job.** Run `python3 agent_worker.py list`. If a specific `job_id`
    was given, use it. Note `frames_dir`, `frame_count`, and `duration`.
 
@@ -71,6 +78,12 @@ python3 agent_worker.py wait <job_id> --timeout 900  # block until render done
 
 ## Moment-selection algorithm (accuracy)
 
+> **Authoritative source: `HOOK_DETECTION.md`.** The rules below are a summary; if
+> anything conflicts, `HOOK_DETECTION.md` wins. **Core creed: _See it, prove it,
+> or skip it_** — a hook event has a visible payoff you can point to in a specific
+> frame. No payoff → not a hook → do not clip. If nothing qualifies, return fewer
+> or zero shorts (never filler). **Discard any moment scoring below 6.**
+
 Judge each candidate window on these signals and keep only genuine highlights:
 
 - **Result/outcome visible** — a kill, victory/defeat banner, "VICTORY", scoreboard
@@ -94,8 +107,11 @@ Judge each candidate window on these signals and keep only genuine highlights:
   you can't see in the frames.**
 
 **Timing rules:**
-- Aim for shorts ~20–45s. Set `end_time` at the payoff, `start_time` ≈ 25–40s
-  earlier (the app trims/pads to 15–60s and puts the last ~7s hook FIRST).
+- Aim for shorts ~20–45s for snappy clips, but you **may extend up to ~2:59**
+  when a moment deserves it — YouTube treats a vertical ≤ 3 min as a Short, and
+  longer clips can earn more watch time. Set `end_time` at the payoff, `start_time`
+  earlier by the desired length (the app trims/pads between 15s and 179s and puts
+  the last ~7s hook FIRST).
 - `peak_time` should be the exact most-epic frame (used for the thumbnail).
 - Avoid overlapping moments; if two candidates overlap, keep the higher score.
 

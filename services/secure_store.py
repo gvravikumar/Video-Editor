@@ -16,6 +16,7 @@ Nothing here ever logs secret values.
 """
 
 import os
+import sys
 import base64
 import logging
 
@@ -25,6 +26,28 @@ SERVICE_NAME = "videostudio-ai"
 _BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SECRETS_DIR = os.path.join(_BASE, "state", "secrets")
 _KEYFILE = os.path.join(_SECRETS_DIR, ".fernet.key")
+
+
+def _restrict_perms(path):
+    """
+    Best-effort restrict a file to the current user only. Cross-platform and
+    never raises: POSIX uses chmod(0600); Windows uses icacls to grant only the
+    current user. If it fails, the encrypted content is still protected by the
+    Fernet key (ideally itself in the OS keychain).
+    """
+    try:
+        if os.name == "nt":
+            import subprocess
+            user = os.environ.get("USERNAME")
+            if user:
+                subprocess.run(
+                    ["icacls", path, "/inheritance:r", "/grant:r", f"{user}:F"],
+                    capture_output=True, check=False,
+                )
+        else:
+            os.chmod(path, 0o600)
+    except Exception as e:  # pragma: no cover
+        logger.debug("Could not restrict perms on %s: %s", path, e)
 
 
 def _keyring():
@@ -90,7 +113,7 @@ def _get_fernet():
                 os.makedirs(_SECRETS_DIR, exist_ok=True)
                 with open(_KEYFILE, "wb") as f:
                     f.write(key.encode())
-                os.chmod(_KEYFILE, 0o600)
+                _restrict_perms(_KEYFILE)
                 logger.warning(
                     "Stored encryption key in a local 0600 file (%s); OS keychain "
                     "was unavailable. Protect this file.", _KEYFILE
@@ -109,7 +132,7 @@ def _file_set(name, value):
     path = _file_path(name)
     with open(path, "wb") as fh:
         fh.write(token)
-    os.chmod(path, 0o600)
+    _restrict_perms(path)
 
 
 def _file_get(name):

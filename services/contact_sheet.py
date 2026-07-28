@@ -45,13 +45,23 @@ def build_contact_sheets(
     sheets_dir = os.path.join(frames_dir, "sheets")
     os.makedirs(sheets_dir, exist_ok=True)
 
-    try:
-        font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial Bold.ttf", 18)
-    except Exception:
+    # Cross-platform bold font (macOS / Linux / Windows), fallback to default.
+    font = None
+    for _c in (
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "C:\\Windows\\Fonts\\arialbd.ttf",
+        "C:\\Windows\\Fonts\\segoeuib.ttf",
+        "arialbd.ttf",
+    ):
         try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
+            font = ImageFont.truetype(_c, 18)
+            break
         except Exception:
-            font = ImageFont.load_default()
+            continue
+    if font is None:
+        font = ImageFont.load_default()
 
     sheets = []
     sheet_w = cols * cell_w

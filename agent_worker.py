@@ -58,6 +58,9 @@ def cmd_list(_args):
             for j in jobs
         ],
         "total": len(jobs),
+        "MUST_READ": "Before selecting any moment, read HOOK_DETECTION.md and follow "
+                     "it strictly (vision gate, ground-truth payoff signals, score>=6 "
+                     "filter, self-verification). 'See it, prove it, or skip it.'",
     })
 
 
@@ -100,6 +103,51 @@ def cmd_frames(args):
     })
 
 
+def _lint_plan(plan):
+    """
+    Enforce the HOOK_DETECTION.md quality bar before a plan is accepted. Returns
+    a list of human-readable problems (empty = passes). This is a guardrail so a
+    careless agent can't submit obvious filler.
+    """
+    problems = []
+    moments = plan.get("moments") if isinstance(plan, dict) else None
+    if not isinstance(moments, list) or not moments:
+        return ["plan.moments must be a non-empty list"]
+
+    for i, m in enumerate(moments):
+        tag = f"moment[{i}]"
+        reason = str(m.get("reason", "")).strip()
+        desc = str(m.get("description", "")).strip()
+        score = m.get("virality_score", 0)
+        # Rule: every moment must be grounded — a 'reason' pointing at what was seen.
+        if len(reason) < 15:
+            problems.append(f"{tag}: 'reason' too short/absent — you must state the "
+                            f"visible payoff you saw (HOOK_DETECTION.md Rule 0).")
+        # Rule: score gate >= 6.
+        try:
+            if float(score) < 6:
+                problems.append(f"{tag}: virality_score {score} < 6 — discard it "
+                                f"(HOOK_DETECTION.md scoring gate).")
+        except (TypeError, ValueError):
+            problems.append(f"{tag}: virality_score missing/invalid.")
+        # Rule: need a payoff-ish signal word in reason (soft check, warns only).
+        if reason and not any(k in reason.lower() for k in (
+            "win", "won", "victory", "elimin", "kill", "ko", "knock", "clutch",
+            "combo", "mission passed", "placed", "xp", "boss", "defeat", "ace",
+            "score", "goal", "finish", "surviv", "headshot", "explos")):
+            problems.append(f"{tag}: 'reason' has no clear payoff keyword — make "
+                            f"sure a real on-screen result is described, not vibes.")
+
+    # Overlap check
+    spans = sorted((float(m.get("start_time", 0)), float(m.get("end_time", 0)))
+                   for m in moments if m.get("end_time"))
+    for a, b in zip(spans, spans[1:]):
+        if b[0] < a[1]:
+            problems.append(f"moments overlap ({a} & {b}); keep only the higher score.")
+            break
+    return problems
+
+
 def cmd_submit(args):
     jq = _jq()
     if args.plan == "-":
@@ -108,9 +156,22 @@ def cmd_submit(args):
         with open(args.plan) as f:
             raw = f.read()
     plan = json.loads(raw)
+
+    problems = _lint_plan(plan)
+    if problems and not args.force:
+        _print({
+            "status": "rejected",
+            "message": "Plan failed the HOOK_DETECTION.md quality gate. Fix these, "
+                       "or re-run with --force if you are certain each moment has a "
+                       "payoff you actually saw in a frame.",
+            "problems": problems,
+        })
+        sys.exit(2)
+
     normalized = jq.save_plan(args.job_id, plan)
     _print({
         "status": "submitted",
+        "quality_gate": "forced" if (problems and args.force) else "passed",
         "job_id": args.job_id,
         "moment_count": len(normalized["moments"]),
         "moments": [
@@ -167,6 +228,8 @@ def main():
     p_submit = sub.add_parser("submit")
     p_submit.add_argument("job_id")
     p_submit.add_argument("plan", help="path to plan.json, or '-' for stdin")
+    p_submit.add_argument("--force", action="store_true",
+                          help="submit even if the HOOK_DETECTION.md quality gate flags issues")
     p_submit.set_defaults(func=cmd_submit)
 
     p_status = sub.add_parser("status")

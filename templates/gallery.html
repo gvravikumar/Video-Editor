@@ -51,6 +51,16 @@
             border-color: var(--accent);
             box-shadow: 0 12px 30px rgba(0,0,0,.5);
         }
+        /* Responsive auto-fill grid: always fills the full screen width with as
+           many ~210px cards as fit, regardless of viewport breakpoints. */
+        .shorts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+            gap: 1rem;
+        }
+        @media (max-width: 640px) {
+            .shorts-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .6rem; }
+        }
         .thumb-wrap {
             position: relative;
             aspect-ratio: 9 / 16;
@@ -94,6 +104,11 @@
         .tag-chip {
             background: var(--panel-2); border: 1px solid var(--border);
             color:#9fc0ff; border-radius: 999px; padding: .08rem .5rem; font-size: .68rem;
+        }
+        .game-chip {
+            align-self:flex-start; background:rgba(91,140,255,.12); color:#9fc0ff;
+            border:1px solid var(--border); border-radius:999px;
+            padding:.05rem .5rem; font-size:.62rem; font-weight:600; text-transform:uppercase; letter-spacing:.3px;
         }
         .card-actions { display:flex; gap:.4rem; margin-top:auto; }
         .card-actions .btn { font-size: .72rem; padding: .3rem .5rem; }
@@ -142,7 +157,7 @@
         </div>
         <div class="container-fluid px-4">
             <ul class="nav nav-tabs border-0" id="galleryTabs">
-                <li class="nav-item"><button class="nav-link active" data-tab="generated"><i class="bi bi-grid-3x3-gap me-1"></i>Generated</button></li>
+                <li class="nav-item"><button class="nav-link active" data-tab="generated"><i class="bi bi-grid-3x3-gap me-1"></i>Generated <span class="badge bg-secondary rounded-pill ms-1" id="tab-generated-count">0</span></button></li>
                 <li class="nav-item"><button class="nav-link" data-tab="uploaded"><i class="bi bi-youtube me-1"></i>Uploaded <span class="badge bg-danger rounded-pill ms-1" id="tab-uploaded-count">0</span></button></li>
             </ul>
         </div>
@@ -150,16 +165,33 @@
 
     <main class="container-fluid px-4 py-4">
         <div id="tab-generated">
+            <div id="gen-toolbar" class="d-flex align-items-center flex-wrap gap-2 mb-3 d-none">
+                <button id="bulk-btn" class="btn btn-danger rounded-pill" onclick="openBulkChooser()">
+                    <i class="bi bi-youtube me-1"></i>Upload all to YouTube
+                </button>
+                <div id="bulk-progress" class="flex-grow-1 d-none" style="max-width:520px">
+                    <div class="d-flex justify-content-between small text-muted mb-1">
+                        <span id="bulk-status">Uploading…</span>
+                        <span id="bulk-count"></span>
+                    </div>
+                    <div class="progress" style="height:6px;background:var(--panel-2)">
+                        <div id="bulk-bar" class="progress-bar bg-danger" style="width:0%"></div>
+                    </div>
+                </div>
+                <button id="bulk-stop" class="btn btn-outline-light rounded-pill d-none" onclick="stopBulk()">
+                    <i class="bi bi-stop-circle me-1"></i>Stop
+                </button>
+            </div>
             <div id="gallery-root"></div>
             <div id="empty" class="empty-state d-none">
-                <i class="bi bi-inbox fs-1 d-block mb-3"></i>
-                <h5>No generated shorts yet</h5>
-                <p>Upload a gameplay video and generate AI shorts — they'll show up here.</p>
-                <a href="/" class="btn btn-primary rounded-pill mt-2"><i class="bi bi-upload me-1"></i>Go generate some</a>
+                <i class="bi bi-check2-circle fs-1 d-block mb-3 text-success"></i>
+                <h5>All shorts uploaded 🎉</h5>
+                <p>Every generated short has been published — see them in the <strong>Uploaded</strong> tab.<br>Generate more from the editor to see new ones here.</p>
+                <a href="/" class="btn btn-primary rounded-pill mt-2"><i class="bi bi-upload me-1"></i>Generate more</a>
             </div>
         </div>
         <div id="tab-uploaded" class="d-none">
-            <div id="archive-root" class="row g-3"></div>
+            <div id="archive-root" class="shorts-grid"></div>
             <div id="archive-empty" class="empty-state d-none">
                 <i class="bi bi-youtube fs-1 d-block mb-3 text-danger"></i>
                 <h5>Nothing uploaded yet</h5>
@@ -240,6 +272,37 @@
         </div>
     </div>
 
+    <!-- Privacy chooser (shown when clicking Upload on a card) -->
+    <div class="modal fade" id="privacyModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered modal-sm">
+            <div class="modal-content" style="background: var(--panel); border:1px solid var(--border);">
+                <div class="modal-header border-secondary py-2">
+                    <h6 class="modal-title text-white"><i class="bi bi-youtube text-danger me-2"></i>Upload to YouTube</h6>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="small text-muted mb-1">Choose who can see it:</div>
+                    <div class="text-white small fw-semibold mb-3" id="pc-title" style="line-height:1.3"></div>
+                    <div class="d-grid gap-2">
+                        <button class="btn btn-outline-light rounded-pill text-start" onclick="choosePrivacy('private', this)">
+                            <i class="bi bi-lock-fill me-2 text-secondary"></i>Private <span class="text-muted small">— only you</span>
+                        </button>
+                        <button class="btn btn-outline-info rounded-pill text-start" onclick="choosePrivacy('unlisted', this)">
+                            <i class="bi bi-link-45deg me-2"></i>Unlisted <span class="text-muted small">— anyone with the link</span>
+                        </button>
+                        <button class="btn btn-danger rounded-pill text-start" onclick="choosePrivacy('public', this)">
+                            <i class="bi bi-globe2 me-2"></i>Public <span class="opacity-75 small">— everyone</span>
+                        </button>
+                    </div>
+                    <div id="pc-note" class="small text-muted mt-3"></div>
+                    <div class="small text-warning-emphasis mt-2" style="font-size:.72rem">
+                        <i class="bi bi-info-circle me-1"></i>While the app is unverified, YouTube may force uploads to Private. Change visibility later in YouTube Studio.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="toast" class="toast-copied">Copied!</div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
@@ -287,45 +350,35 @@
             document.getElementById('stat-videos').textContent = data.video_count;
             document.getElementById('stat-shorts').textContent = data.short_count;
 
+            // Flatten all shorts into one list; tag each with its game for context.
+            const all = [];
+            data.videos.forEach(v => {
+                v.shorts.forEach(s => { s.game = v.game || 'Gameplay'; window._shorts[skey(s)] = s; all.push(s); });
+            });
+
+            // Generated tab shows only shorts NOT yet uploaded to YouTube.
+            const pending = all.filter(s => !(s.youtube && s.youtube.video_id));
+
             const root = document.getElementById('gallery-root');
             root.innerHTML = '';
-            if (!data.videos.length) {
-                document.getElementById('empty').classList.remove('d-none');
-            } else {
-                document.getElementById('empty').classList.add('d-none');
-            }
+            document.getElementById('empty').classList.toggle('d-none', pending.length > 0);
 
-            data.videos.forEach(v => {
-                const section = document.createElement('section');
-                section.className = 'mb-5';
-                const header = document.createElement('div');
-                header.className = 'video-group-header mb-3';
-                header.innerHTML = `
-                    <div class="d-flex align-items-center flex-wrap gap-2">
-                        <h5 class="mb-0 text-white">${esc(v.game || 'Gameplay')}</h5>
-                        <span class="badge bg-dark rounded-pill">${v.short_count} shorts</span>
-                        <a href="/shorts/${esc(v.job_id)}/metadata.txt" download class="btn btn-sm btn-outline-secondary rounded-pill ms-1"><i class="bi bi-file-earmark-text me-1"></i>All metadata</a>
-                    </div>
-                    <div class="small text-muted">${esc(v.summary || v.filename)}</div>`;
-                section.appendChild(header);
-
-                const row = document.createElement('div');
-                row.className = 'row g-3';
-                v.shorts.forEach(s => { window._shorts[skey(s)] = s; row.appendChild(card(s)); });
-                section.appendChild(row);
-                root.appendChild(section);
-            });
+            const grid = document.createElement('div');
+            grid.className = 'shorts-grid';
+            pending.forEach(s => grid.appendChild(card(s)));
+            root.appendChild(grid);
+            document.getElementById('tab-generated-count').textContent = pending.length;
+            document.getElementById('gen-toolbar').classList.toggle('d-none', pending.length === 0);
 
             loadArchive();
         }
 
         function card(s) {
             const col = document.createElement('div');
-            col.className = 'col-6 col-sm-4 col-md-3 col-xl-2';
+            col.className = 'grid-item';
             col.dataset.key = skey(s);
             const cat = (s.category || 'INTENSE').toUpperCase();
             const tags = (s.tags || []).map(hashTag);
-            const uploaded = s.youtube && s.youtube.video_id;
             col.innerHTML = `
                 <div class="short-card">
                     <div class="thumb-wrap" style="background-image:url('${esc(s.thumbnail_url)}')">
@@ -336,16 +389,16 @@
                         <span class="badge-vir"><i class="bi bi-fire"></i> ${s.virality_score}/10</span>
                         <span class="play-fab"><i class="bi bi-play-fill"></i></span>
                         <span class="badge-dur">${s.duration}s</span>
-                        <span class="yt-badge ${uploaded ? '' : 'd-none'}"><i class="bi bi-youtube me-1"></i>On YouTube</span>
                     </div>
                     <div class="short-body">
+                        <span class="game-chip"><i class="bi bi-controller me-1"></i>${esc(s.game || 'Gameplay')}</span>
                         <h6 class="short-title">${esc(s.title)}</h6>
                         <p class="short-desc">${esc(s.description)}</p>
                         <div class="tag-chips">${tags.slice(0,6).map(t => `<span class="tag-chip">${esc(t)}</span>`).join('')}${tags.length>6?`<span class="tag-chip">+${tags.length-6}</span>`:''}</div>
                         <div class="card-actions">
-                            <button class="btn btn-outline-light rounded-pill flex-fill view-btn"><i class="bi bi-arrows-fullscreen"></i></button>
-                            <button class="btn ${uploaded ? 'btn-outline-danger' : 'btn-danger'} rounded-pill flex-fill yt-btn" title="${uploaded ? 'View on YouTube' : 'Upload to YouTube'}"><i class="bi bi-youtube"></i></button>
-                            <a class="btn btn-success rounded-pill flex-fill" href="${esc(s.video_url)}" download><i class="bi bi-download"></i></a>
+                            <button class="btn btn-outline-light rounded-pill flex-fill view-btn" title="Preview"><i class="bi bi-arrows-fullscreen"></i></button>
+                            <button class="btn btn-danger rounded-pill flex-fill yt-btn" title="Upload to YouTube"><i class="bi bi-youtube"></i></button>
+                            <a class="btn btn-success rounded-pill flex-fill" href="${esc(s.video_url)}" download title="Download"><i class="bi bi-download"></i></a>
                         </div>
                     </div>
                 </div>`;
@@ -360,10 +413,10 @@
             col.querySelector('.yt-btn').addEventListener('click', (e) => {
                 e.stopPropagation();
                 const cur = window._shorts[skey(s)];
-                if (cur.youtube && cur.youtube.video_id) {
-                    window.open(cur.youtube.url, '_blank');
+                if (!window._yt.available || !window._yt.configured || !window._yt.connected) {
+                    openSetup();                                   // needs setup / sign-in
                 } else {
-                    openModal(cur);  // route through modal so user picks privacy / connects
+                    openPrivacyChooser(cur);                       // ready → choose privacy, then upload
                 }
             });
             return col;
@@ -372,10 +425,15 @@
         function updateCard(s) {
             const col = document.querySelector(`[data-key="${skey(s)}"]`);
             if (!col) return;
-            const uploaded = s.youtube && s.youtube.video_id;
-            col.querySelector('.yt-badge').classList.toggle('d-none', !uploaded);
-            const b = col.querySelector('.yt-btn');
-            b.className = `btn ${uploaded ? 'btn-outline-danger' : 'btn-danger'} rounded-pill flex-fill yt-btn`;
+            // Once uploaded, the short moves out of Generated and into the
+            // Uploaded/Archive tab — remove its card here.
+            if (s.youtube && s.youtube.video_id) {
+                col.remove();
+                const remaining = document.querySelectorAll('#gallery-root .grid-item').length;
+                document.getElementById('tab-generated-count').textContent = remaining;
+                document.getElementById('empty').classList.toggle('d-none', remaining > 0);
+                document.getElementById('gen-toolbar').classList.toggle('d-none', remaining === 0);
+            }
         }
 
         function tagsOf(s){ return (s.tags||[]).map(hashTag); }
@@ -435,14 +493,11 @@
             }
         }
 
-        async function uploadCurrent(btn) {
-            const s = window._current;
-            if (!s) return;
-            const privacy = document.getElementById('m-privacy').value;
-            btn.disabled = true;
-            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Uploading…';
-            document.getElementById('m-yt-note').textContent = 'Uploading to YouTube — this can take a moment.';
+        // Shared upload — works from the card chooser and the detail modal.
+        async function uploadShort(s, privacy, opts = {}) {
+            const note = opts.note || (() => {});
             try {
+                note('Uploading to YouTube — this can take a moment.');
                 const res = await fetch('/youtube/upload', {
                     method:'POST', headers:{'Content-Type':'application/json'},
                     body: JSON.stringify({ job_id: s.job_id, index: s.index, privacy })
@@ -452,14 +507,129 @@
                 s.youtube = data.youtube;
                 window._shorts[skey(s)] = s;
                 updateCard(s);
-                renderModalYouTube(s);
-                showToast('Uploaded to YouTube!');
+                if (window._current && skey(window._current) === skey(s)) renderModalYouTube(s);
+                showToast(data.status === 'already_uploaded' ? 'Already uploaded' : 'Uploaded to YouTube!');
                 loadArchive();
+                return true;
             } catch (e) {
-                document.getElementById('m-yt-note').innerHTML = `<span class="text-danger">${esc(e.message)}</span>`;
+                note(`<span class="text-danger">${esc(e.message)}</span>`);
+                showToast(e.message);
+                return false;
+            }
+        }
+
+        async function uploadCurrent(btn) {
+            const s = window._current;
+            if (!s) return;
+            const privacy = document.getElementById('m-privacy').value;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Uploading…';
+            const ok = await uploadShort(s, privacy, {
+                note: (html) => { document.getElementById('m-yt-note').innerHTML = html; }
+            });
+            if (!ok) {
                 btn.disabled = false;
                 btn.innerHTML = '<i class="bi bi-youtube me-1"></i>Upload to YouTube';
             }
+        }
+
+        // Privacy chooser (card button → pick visibility → upload).
+        // When `_bulkMode` is true, the chosen privacy applies to ALL pending shorts.
+        let _pendingShort = null;
+        let _bulkMode = false;
+        function openPrivacyChooser(s) {
+            _bulkMode = false;
+            _pendingShort = s;
+            document.getElementById('pc-title').textContent = s.title;
+            document.getElementById('pc-note').innerHTML =
+                `Uploading to <strong>${esc(window._yt.channel || 'your channel')}</strong>.`;
+            bootstrap.Modal.getOrCreateInstance(document.getElementById('privacyModal')).show();
+        }
+        function openBulkChooser() {
+            if (!window._yt.available || !window._yt.configured || !window._yt.connected) { openSetup(); return; }
+            _bulkMode = true;
+            const n = document.querySelectorAll('#gallery-root .grid-item').length;
+            document.getElementById('pc-title').textContent = `Upload all ${n} pending shorts`;
+            document.getElementById('pc-note').innerHTML =
+                `Uploads run one at a time to <strong>${esc(window._yt.channel || 'your channel')}</strong>. ` +
+                `Note: YouTube's default quota allows only ~6 uploads/day — the rest will stop automatically and you can resume tomorrow.`;
+            bootstrap.Modal.getOrCreateInstance(document.getElementById('privacyModal')).show();
+        }
+        async function choosePrivacy(privacy, btn) {
+            bootstrap.Modal.getOrCreateInstance(document.getElementById('privacyModal')).hide();
+            if (_bulkMode) { runBulk(privacy); return; }
+            const s = _pendingShort;
+            if (!s) return;
+            const orig = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Uploading…';
+            await uploadShort(s, privacy, {});
+            btn.disabled = false; btn.innerHTML = orig;
+        }
+
+        // ---------------- Bulk upload (sequential, quota-aware) ----------------
+        let _bulkCancel = false;
+        function stopBulk() { _bulkCancel = true; }
+
+        async function runBulk(privacy) {
+            _bulkCancel = false;
+            // Snapshot the currently pending shorts (cards present in the grid).
+            const keys = [...document.querySelectorAll('#gallery-root .grid-item')].map(el => el.dataset.key);
+            const total = keys.length;
+            if (!total) return;
+
+            const bar = document.getElementById('bulk-bar');
+            const statusEl = document.getElementById('bulk-status');
+            const countEl = document.getElementById('bulk-count');
+            document.getElementById('bulk-progress').classList.remove('d-none');
+            document.getElementById('bulk-stop').classList.remove('d-none');
+            document.getElementById('bulk-btn').disabled = true;
+
+            let done = 0, ok = 0, failed = 0;
+            for (const key of keys) {
+                if (_bulkCancel) { statusEl.textContent = 'Stopped.'; break; }
+                const s = window._shorts[key];
+                if (!s || (s.youtube && s.youtube.video_id)) { done++; continue; }
+
+                statusEl.textContent = `Uploading: ${s.title.slice(0, 48)}…`;
+                countEl.textContent = `${done}/${total}`;
+                // Highlight the card being uploaded
+                const cardEl = document.querySelector(`[data-key="${key}"] .short-card`);
+                if (cardEl) cardEl.style.outline = '2px solid var(--accent)';
+
+                try {
+                    const res = await fetch('/youtube/upload', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ job_id: s.job_id, index: s.index, privacy })
+                    });
+                    const data = await res.json();
+                    if (res.status === 429 || data.reason === 'quota') {
+                        statusEl.innerHTML = `<span class="text-warning">Daily quota reached — uploaded ${ok}. Resume tomorrow.</span>`;
+                        showToast('YouTube daily quota reached');
+                        break;
+                    }
+                    if (!res.ok) throw new Error(data.error || 'Upload failed');
+                    s.youtube = data.youtube;
+                    window._shorts[key] = s;
+                    ok++;
+                    updateCard(s);                 // removes card from Generated
+                } catch (e) {
+                    failed++;
+                    if (cardEl) cardEl.style.outline = '2px solid #b5462a';
+                    console.warn('Bulk upload failed for', key, e);
+                }
+                done++;
+                bar.style.width = `${Math.round((done / total) * 100)}%`;
+                countEl.textContent = `${done}/${total}`;
+            }
+
+            if (!_bulkCancel && statusEl.textContent.indexOf('quota') === -1) {
+                statusEl.textContent = `Done — uploaded ${ok}${failed ? `, ${failed} failed` : ''}.`;
+            }
+            showToast(`Bulk upload: ${ok} uploaded${failed ? `, ${failed} failed` : ''}`);
+            document.getElementById('bulk-stop').classList.add('d-none');
+            document.getElementById('bulk-btn').disabled = false;
+            loadArchive();
         }
 
         // ---------------- YouTube connect / setup ----------------
@@ -540,7 +710,7 @@
 
             data.items.forEach(it => {
                 const col = document.createElement('div');
-                col.className = 'col-6 col-sm-4 col-md-3 col-xl-2';
+                col.className = 'grid-item';
                 const cat = (it.category || 'INTENSE').toUpperCase();
                 col.innerHTML = `
                     <div class="short-card">

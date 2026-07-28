@@ -247,7 +247,11 @@ def youtube_upload():
             description=meta.get('description', ''),
             tags=meta.get('tags', []),
             privacy=privacy,
+            thumbnail_path=short.get('thumbnail_path'),
         )
+    except youtube_uploader.QuotaExceededError as e:
+        logger.warning("YouTube quota reached on %s#%s: %s", job_id, index, e)
+        return jsonify({'error': str(e), 'reason': 'quota'}), 429
     except Exception as e:
         logger.error("YouTube upload failed for %s#%s: %s", job_id, index, e)
         return jsonify({'error': str(e)}), 400
@@ -304,8 +308,9 @@ def serve_upload(filename):
 
 def _get_video_metadata_fast(filepath):
     """
-    Extract video metadata using ffprobe (bundled with FFmpeg/MoviePy).
-    ~50ms per file vs 2-5s with VideoFileClip — critical for listing many videos.
+    Extract video metadata quickly. Prefer ffprobe (fast); if it's not available
+    (common on Windows without a full FFmpeg install), fall back to OpenCV, which
+    is always installed. Returns None only if both fail.
     """
     import subprocess
     try:
@@ -333,6 +338,21 @@ def _get_video_metadata_fast(filepath):
             return {'duration': duration, 'resolution': [width, height], 'fps': fps}
     except Exception as e:
         logger.debug(f"ffprobe metadata failed for {filepath}: {e}")
+
+    # Fallback: OpenCV (no external binary needed) — works everywhere.
+    try:
+        import cv2
+        cap = cv2.VideoCapture(filepath)
+        if cap.isOpened():
+            fps = cap.get(cv2.CAP_PROP_FPS) or 0
+            frames = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            cap.release()
+            duration = round(frames / fps, 2) if fps else 0
+            return {'duration': duration, 'resolution': [width, height], 'fps': round(fps, 2)}
+    except Exception as e:
+        logger.debug(f"OpenCV metadata failed for {filepath}: {e}")
     return None
 
 

@@ -40,6 +40,10 @@ VALID_PRIVACY = {"private", "unlisted", "public"}
 DEFAULT_PRIVACY = "private"
 
 
+class QuotaExceededError(RuntimeError):
+    """Raised when YouTube rejects an upload because the daily API quota is spent."""
+
+
 # ------------------------------------------------------------------ dependencies
 def _deps_available():
     try:
@@ -181,10 +185,16 @@ def disconnect() -> None:
 
 def upload(video_path: str, title: str, description: str, tags=None,
            privacy: str = DEFAULT_PRIVACY, made_for_kids: bool = False,
-           progress_callback=None) -> dict:
+           thumbnail_path: str = None, progress_callback=None) -> dict:
     """
-    Upload one video (resumable). Returns {video_id, url, privacy, uploaded_at}.
-    Raises RuntimeError on any hard failure.
+    Upload one video (resumable). Returns
+    {video_id, url, privacy, uploaded_at, custom_thumbnail}.
+
+    If `thumbnail_path` is given and the channel is eligible for custom
+    thumbnails, it is set via thumbnails.set (best-effort). Channels that are not
+    verified get a 403 there — we swallow it and let YouTube auto-generate the
+    thumbnail, so the upload always succeeds.
+    Raises RuntimeError only on hard upload failures.
     """
     if not _deps_available():
         raise RuntimeError("YouTube libraries not installed.")
@@ -228,12 +238,42 @@ def upload(video_path: str, title: str, description: str, tags=None,
             if gstatus and progress_callback:
                 progress_callback(int(gstatus.progress() * 100))
     except HttpError as e:
+        reason = ""
+        try:
+            reason = e.error_details[0].get("reason", "") if e.error_details else ""
+        except Exception:
+            reason = ""
+        blob = (reason + " " + str(e)).lower()
+        if "quota" in blob or "dailylimit" in blob or getattr(e, "status_code", None) == 403 and "quota" in blob:
+            raise QuotaExceededError(
+                "YouTube daily upload quota reached (~6 uploads/day on the default "
+                "limit). Try again after the quota resets, or request a higher quota."
+            ) from e
         raise RuntimeError(f"YouTube upload failed: {e}") from e
 
     video_id = response["id"]
+
+    # Best-effort custom thumbnail (needs a verified channel; ignore if forbidden).
+    custom_thumbnail = False
+    thumb_error = None
+    if thumbnail_path and os.path.exists(thumbnail_path):
+        try:
+            thumb_media = MediaFileUpload(thumbnail_path, mimetype="image/jpeg")
+            svc.thumbnails().set(videoId=video_id, media_body=thumb_media).execute()
+            custom_thumbnail = True
+            logger.info("Custom thumbnail set for %s", video_id)
+        except HttpError as e:
+            # 403 => channel not eligible for custom thumbnails (needs verification).
+            thumb_error = getattr(e, "status_code", None) or "error"
+            logger.warning("Custom thumbnail not set (%s); YouTube will auto-generate. %s",
+                           thumb_error, e)
+        except Exception as e:  # pragma: no cover
+            logger.warning("Custom thumbnail failed: %s", e)
+
     return {
         "video_id": video_id,
         "url": _watch_url(video_id),
         "privacy": privacy,
         "uploaded_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "custom_thumbnail": custom_thumbnail,
     }

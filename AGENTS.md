@@ -79,7 +79,20 @@ pattern used to process all uploads. Rough recipe:
 
 ## 4. Choosing moments (accuracy algorithm)
 
-Scan the frames and keep only **genuine highlights**. Signals, strongest first:
+> 🚨 **MANDATORY:** hook-event selection is governed by **[`HOOK_DETECTION.md`](HOOK_DETECTION.md)**
+> — the strict playbook. You MUST read it and follow every rule (Rule 0 vision
+> gate, the ground-truth payoff signals, the ≥6 scoring filter, the anti-patterns,
+> and the mandatory self-verification) before submitting a plan. The summary below
+> is only a pointer; `HOOK_DETECTION.md` is the source of truth and overrides any
+> shorter description here.
+
+**Core creed: _See it, prove it, or skip it._** A hook event has a **payoff you
+can point to in a specific frame** (kill feed, `VICTORY ROYALE`, `MISSION PASSED`,
+`+XP`, KO/combo counter, etc.). No visible payoff → not a hook → do not clip it.
+Never fabricate events. If nothing qualifies, return **fewer or zero** shorts
+rather than filler.
+
+Signals, strongest first:
 
 - **Result/outcome on screen** — a kill feed, `VICTORY ROYALE` / `#1`, `MISSION
   PASSED`, `YOU PLACED #N`, a KO banner, a scoreboard jump, `+XP` popups.
@@ -90,17 +103,20 @@ Scan the frames and keep only **genuine highlights**. Signals, strongest first:
   loading screens, idle lobbies.
 - **Emotion / humor** — funny deaths, glitches, ragdolls → `FUNNY`.
 
-### Virality score (1–10)
+### Virality score (1–10) — then FILTER
 
 Start at 5, then:
 `+2` clear win / decisive kill · `+2` rare/improbable · `+1` obvious build-up→payoff
-· `+1` visually clean · `−2` ambiguous or you're inferring. Cap at 10.
-Prefer `WINNING`/`CLUTCH`/`FUNNY` for shareability.
+· `+1` visually clean · `−2` ambiguous or you're inferring · `−4` menu/loading/idle.
+**Discard every moment scoring below 6.** Prefer `WINNING`/`CLUTCH`/`FUNNY`.
 
 ### Timing rules
 
-- Target ~20–45s. Set `end_time` at the **payoff**; `start_time` ≈ 25–40s earlier
-  (the renderer trims/pads to 15–60s and puts the last ~7s **hook first**).
+- Target ~20–45s for punchy clips, but you **may go up to ~2:59** for a richer
+  moment (YouTube still counts a vertical ≤ 3 min as a Short — longer can mean
+  more watch time). Set `end_time` at the **payoff**; `start_time` earlier by the
+  length you want (the renderer trims/pads between 15s and 179s and puts the last
+  ~7s **hook first**).
 - `peak_time` = the single most epic instant (used for the thumbnail).
 - Avoid overlapping moments; if two overlap, keep the higher score.
 - Categories: `WINNING, LOSING, SATISFYING, INTENSE, FUNNY, CLUTCH`.
@@ -266,7 +282,8 @@ still runs and the UI shows exact setup guidance.
 
 | Path | Role |
 |---|---|
-| `agent_worker.py` | CLI you drive: `list / show / frames / submit / wait / status` |
+| `HOOK_DETECTION.md` | **strict hook-event playbook — read before selecting any moment** |
+| `agent_worker.py` | CLI you drive: `list / show / frames / submit / wait / status` (enforces the quality gate on submit) |
 | `batch_render.py` | Batch pattern: analyze many uploads → render + register jobs |
 | `refresh_metadata.py` | Rewrite title/description/tags of existing shorts (no re-render) |
 | `services/frame_extractor.py` | video → frames (OpenCV) |

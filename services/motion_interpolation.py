@@ -29,7 +29,19 @@ DEFAULT_TARGET_FPS = 60
 
 
 def _ffmpeg() -> str:
-    return shutil.which("ffmpeg") or "ffmpeg"
+    """
+    Resolve an ffmpeg executable. Prefer one on PATH; otherwise fall back to the
+    binary bundled with imageio-ffmpeg (which MoviePy installs), so smoothing works
+    on Windows/macOS/Linux without a separate ffmpeg install.
+    """
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return "ffmpeg"
 
 
 def source_fps(video_path: str) -> float:
